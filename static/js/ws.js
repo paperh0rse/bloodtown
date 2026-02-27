@@ -1,0 +1,72 @@
+/**
+ * WebSocket wrapper with auto-reconnect.
+ */
+class WS {
+    constructor(url) {
+        this._url = url;
+        this._ws = null;
+        this._handlers = {};
+        this._reconnectTimer = null;
+        this._reconnectDelay = 1000;
+        this.connected = false;
+    }
+
+    connect() {
+        if (this._ws) return;
+        this._ws = new WebSocket(this._url);
+
+        this._ws.onopen = () => {
+            this.connected = true;
+            this._reconnectDelay = 1000;
+            this._dispatch('_open', {});
+        };
+
+        this._ws.onmessage = (e) => {
+            try {
+                const msg = JSON.parse(e.data);
+                this._dispatch(msg.type, msg.data || {});
+            } catch (err) {
+                console.error('WS parse error:', err);
+            }
+        };
+
+        this._ws.onclose = () => {
+            this.connected = false;
+            this._ws = null;
+            this._dispatch('_close', {});
+            this._scheduleReconnect();
+        };
+
+        this._ws.onerror = () => {
+            this._ws?.close();
+        };
+    }
+
+    send(type, data = {}) {
+        if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+            this._ws.send(JSON.stringify({ type, data }));
+        }
+    }
+
+    on(type, handler) {
+        if (!this._handlers[type]) this._handlers[type] = [];
+        this._handlers[type].push(handler);
+    }
+
+    _dispatch(type, data) {
+        (this._handlers[type] || []).forEach(h => h(data));
+    }
+
+    _scheduleReconnect() {
+        clearTimeout(this._reconnectTimer);
+        this._reconnectTimer = setTimeout(() => {
+            this._reconnectDelay = Math.min(this._reconnectDelay * 1.5, 10000);
+            this.connect();
+        }, this._reconnectDelay);
+    }
+
+    close() {
+        clearTimeout(this._reconnectTimer);
+        this._ws?.close();
+    }
+}

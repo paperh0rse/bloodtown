@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>血染钟楼 - 游戏中</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- Join overlay -->
+    <div id="join-overlay" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:100;display:flex;align-items:center;justify-content:center;">
+        <div class="card" style="max-width:360px;width:90%;">
+            <h2>加入游戏</h2>
+            <label for="input-player-name">你的昵称</label>
+            <div class="input-group">
+                <input type="text" id="input-player-name" placeholder="输入昵称" maxlength="12" autofocus>
+                <button class="btn btn-gold" id="btn-join-game">加入</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Game over overlay -->
+    <div id="gameover-overlay" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:100;overflow-y:auto;padding:1rem;"></div>
+
+    <!-- Role help modal -->
+    <div id="role-modal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:100;overflow-y:auto;padding:1rem;">
+        <div class="card" style="max-width:860px;margin:1rem auto;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <h2 style="border:none;margin:0;padding:0;">帮助</h2>
+                <button class="btn btn-secondary btn-sm" id="btn-close-roles">关闭</button>
+            </div>
+            <div class="help-tabs" style="margin-top:0.5rem;">
+                <button class="help-tab active" data-tab="roles">角色介绍</button>
+                <button class="help-tab" data-tab="dist">阵营人数</button>
+            </div>
+            <div id="tab-roles" class="help-tab-content" style="margin-top:0.75rem;">
+                <div id="role-list-content"></div>
+            </div>
+            <div id="tab-dist" class="help-tab-content hidden" style="margin-top:0.75rem;">
+                <div id="dist-content"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast container -->
+    <div id="toast-container" style="position:fixed;top:1rem;right:1rem;z-index:50;max-width:320px;"></div>
+
+    <main>
+        <div class="game-layout">
+            <!-- LEFT COLUMN -->
+            <div class="col-left">
+                <div class="left-header">
+                    <span class="room-code">房间 <strong id="room-code-display"></strong></span>
+                    <button id="btn-leave-room" class="btn-leave" title="退出房间">退出</button>
+                </div>
+                <div class="card log-card" style="flex:7;">
+                    <h2>游戏日志</h2>
+                    <div id="game-log" class="game-log">
+                        <div class="log-entry phase">等待游戏开始...</div>
+                    </div>
+                </div>
+                <div class="card chat-card" style="flex:3;">
+                    <h2>聊天</h2>
+                    <div id="chat-box" class="chat-box"></div>
+                    <div class="input-group">
+                        <input type="text" id="input-chat" placeholder="发送消息..." maxlength="200">
+                        <button class="btn btn-secondary btn-sm" id="btn-send-chat">发送</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CENTER COLUMN -->
+            <div class="col-center">
+                <div id="phase-banner" class="phase-banner">等待中...</div>
+                <div id="broadcast-bar" class="broadcast-bar"></div>
+                <div class="town-card">
+                    <div id="town-square" class="town-square"></div>
+                </div>
+                <div id="host-controls"></div>
+                <div class="card notebook-card">
+                    <h2>笔记本</h2>
+                    <textarea id="notebook" class="notebook" placeholder="在这里记录你的推理..."></textarea>
+                </div>
+            </div>
+
+            <!-- RIGHT COLUMN -->
+            <div class="col-right">
+                <div style="display:flex;justify-content:flex-end;align-items:center;gap:0.4rem;">
+                    <span id="conn-status" class="conn-status disconnected">连接中...</span>
+                    <button class="btn btn-secondary btn-sm" id="btn-show-roles" title="角色介绍">?</button>
+                </div>
+                <div class="card role-info-card">
+                    <h2>你的角色</h2>
+                    <div id="private-panel">
+                        <p style="color:var(--text-muted);font-size:0.8rem;">游戏开始后显示。</p>
+                    </div>
+                    <div id="night-info-container" class="night-info-scroll"></div>
+                    <div id="slayer-btn-area"></div>
+                </div>
+
+                <!-- Day panel: nominations + voting -->
+                <div id="day-panel" class="card nom-card hidden">
+                    <h2>提名情况</h2>
+                    <div id="action-panel" class="day-action-area hidden"></div>
+                    <div id="nom-controls"></div>
+                    <div id="nomination-records" class="nom-records-scroll"></div>
+                </div>
+
+                <!-- Night action panel -->
+                <div id="night-action-panel" class="action-panel hidden"></div>
+
+                <!-- Day action buttons -->
+                <div id="day-buttons" class="hidden day-btns-area"></div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/static/js/ws.js"></script>
+    <script src="/static/js/game.js"></script>
+</body>
+</html>

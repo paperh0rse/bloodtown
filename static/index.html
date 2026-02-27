@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>血染钟楼 - 自动讲述者</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- Name setup modal -->
+    <div id="name-modal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:100;display:flex;align-items:center;justify-content:center;">
+        <div class="card" style="max-width:360px;width:90%;text-align:center;">
+            <h2 style="margin-bottom:0.3rem;">欢迎来到血染钟楼</h2>
+            <p style="color:var(--text-secondary);margin-bottom:1rem;font-size:0.85rem;">请先设置你的游戏昵称</p>
+            <div class="input-group" style="justify-content:center;">
+                <input type="text" id="modal-name-input" placeholder="输入昵称" maxlength="12" autofocus
+                       style="text-align:center;font-size:1.1rem;max-width:200px;">
+                <button class="btn btn-gold" id="modal-name-ok">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <header>
+        <h1>血染钟楼</h1>
+        <div class="subtitle">Blood on the Clocktower · 自动讲述者</div>
+        <div id="name-bar" class="name-bar hidden">
+            <span id="name-display"></span>
+            <button class="btn-inline" id="btn-edit-name">改名</button>
+        </div>
+    </header>
+
+    <main>
+        <div class="container">
+            <div class="card">
+                <h2>创建新游戏</h2>
+                <p style="color:var(--text-secondary);margin-bottom:1rem;">创建一个房间，邀请朋友加入。支持 5-15 人游戏。</p>
+                <button class="btn btn-primary btn-block" id="btn-create">创建房间</button>
+            </div>
+
+            <div class="card">
+                <h2>加入游戏</h2>
+                <p style="color:var(--text-secondary);margin-bottom:0.75rem;">输入房间码加入已有的游戏。</p>
+                <div class="input-group">
+                    <input type="text" id="input-room-code" placeholder="输入房间码" maxlength="6"
+                           style="text-transform:uppercase;letter-spacing:2px;text-align:center;font-size:1.2rem;">
+                    <button class="btn btn-gold" id="btn-join">加入</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>房间列表</h2>
+                <div id="room-list" style="color:var(--text-muted);font-size:0.85rem;">加载中...</div>
+            </div>
+
+            <div class="card">
+                <h2>游戏说明</h2>
+                <div style="color:var(--text-secondary);font-size:0.9rem;line-height:1.7;">
+                    <p><strong style="color:var(--accent-gold)">剧本：</strong>暗流涌动 (Trouble Brewing) — 入门版</p>
+                    <p><strong style="color:var(--accent-gold)">玩法：</strong>程序自动担任讲述者，角色从角色池中随机抽取。</p>
+                    <p><strong style="color:var(--accent-gold)">交流：</strong>白天讨论请使用外部语音（如 Discord / 微信语音）。</p>
+                    <p style="margin-top:0.5rem;">
+                        好人阵营需要找出并处决恶魔来获胜；邪恶阵营需要让恶魔存活直到仅剩2名玩家。
+                        每个角色都有独特的能力，善用信息、推理和欺骗来赢得胜利！
+                    </p>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
