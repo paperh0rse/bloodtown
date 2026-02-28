@@ -2,6 +2,10 @@
 
 Blood on the Clocktower 联机 Web 应用，程序自动担任讲述者。
 
+![大厅页面](assets/screenshot-lobby.png)
+
+![游戏页面](assets/screenshot-game.png)
+
 ## 功能
 
 - 支持 5-15 人联机游戏
