@@ -94,6 +94,51 @@ class TestSlayer:
         await game.handle_slayer("a", "b")
         assert game.players["b"].alive
 
+    async def test_slayer_kills_demon_scarlet_takes_over(self, mock_manager):
+        """Scarlet Woman becomes Imp when slayer kills demon with 5+ alive."""
+        game = make_game({
+            "a": "slayer", "b": "imp", "c": "scarlet_woman",
+            "d": "chef", "e": "empath", "f": "soldier",
+        })
+        game.phase = GamePhase.DAY
+
+        await game.handle_slayer("a", "b")
+
+        assert not game.players["b"].alive
+        assert game.players["c"].role_id == "imp"
+        assert game.phase != GamePhase.GAME_OVER
+
+    async def test_slayer_kills_demon_scarlet_too_few(self, mock_manager):
+        """Scarlet Woman can't take over with <5 alive — good wins."""
+        game = make_game({
+            "a": "slayer", "b": "imp", "c": "scarlet_woman", "d": "chef",
+        })
+        kill(game, "d")
+        game.phase = GamePhase.DAY
+
+        await game.handle_slayer("a", "b")
+
+        assert not game.players["b"].alive
+        assert game.phase == GamePhase.GAME_OVER
+        wins = [b for b in mock_manager.broadcasts if b[1] == "game_over"]
+        assert wins[0][2]["winner"] == "good"
+
+    async def test_slayer_kills_demon_scarlet_dead(self, mock_manager):
+        """Dead Scarlet Woman can't take over — good wins."""
+        game = make_game({
+            "a": "slayer", "b": "imp", "c": "scarlet_woman",
+            "d": "chef", "e": "empath",
+        })
+        kill(game, "c")
+        game.phase = GamePhase.DAY
+
+        await game.handle_slayer("a", "b")
+
+        assert not game.players["b"].alive
+        assert game.phase == GamePhase.GAME_OVER
+        wins = [b for b in mock_manager.broadcasts if b[1] == "game_over"]
+        assert wins[0][2]["winner"] == "good"
+
 
 # ======================================================================
 # Imp (night kill)

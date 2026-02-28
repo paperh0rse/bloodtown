@@ -33,7 +33,10 @@ class ConnectionManager:
     ) -> None:
         ws = self.get(room_code, player_id)
         if ws:
-            await ws.send_text(json.dumps({"type": msg_type, "data": data or {}}, ensure_ascii=False))
+            try:
+                await ws.send_text(json.dumps({"type": msg_type, "data": data or {}}, ensure_ascii=False))
+            except Exception:
+                pass
 
     async def broadcast(
         self, room_code: str, msg_type: str, data: dict[str, Any] | None = None

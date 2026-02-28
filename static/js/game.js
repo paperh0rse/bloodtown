@@ -17,6 +17,7 @@
     let currentAction = null;
     let selectablePlayerIds = [];
     let selectMode = '';
+    let lastVotingData = null;
     let seatMarks = {};
 
     const TEAM_ZH = { townsfolk: '村民', outsider: '外来者', minion: '爪牙', demon: '恶魔' };
@@ -35,9 +36,6 @@
     function roomKey() { return `bt_pid_${roomCode}`; }
 
     function init() {
-        applyHiDPIScale();
-        window.addEventListener('resize', applyHiDPIScale);
-
         const m = location.pathname.match(/\/game\/([A-Z0-9]+)/i);
         if (!m) return;
         roomCode = m[1].toUpperCase();
@@ -63,17 +61,6 @@
         if (nb) {
             nb.value = localStorage.getItem(`bt_notes_${roomCode}`) || '';
             nb.addEventListener('input', () => localStorage.setItem(`bt_notes_${roomCode}`, nb.value));
-        }
-    }
-
-    function applyHiDPIScale() {
-        const layout = $('.game-layout');
-        if (!layout) return;
-        const vh = window.innerHeight;
-        if (vh > 1080) {
-            layout.style.zoom = vh / 1080;
-        } else {
-            layout.style.zoom = '';
         }
     }
 
@@ -116,16 +103,29 @@
 
         ws.on('reconnected', () => showToast('已重新连接', 'info'));
 
-        ws.on('reconnect_failed', () => {
+        ws.on('reconnect_failed', (data) => {
             playerId = '';
             localStorage.removeItem(roomKey());
+            if (data.game_started) {
+                alert(data.message || '游戏已开始，无法重新加入。');
+                location.href = '/';
+                return;
+            }
             ws.send('join', { name: playerName });
+        });
+
+        ws.on('join_rejected', (data) => {
+            alert(data.message || '无法加入房间。');
+            location.href = '/';
         });
 
         ws.on('game_state', (data) => {
             gameState = data;
             isHost = data.host_id === playerId;
             renderAll();
+            if (data.phase !== 'lobby' && !privateState) {
+                ws.send('request_private_state', {});
+            }
         });
 
         ws.on('private_state', (data) => { privateState = data; renderPrivate(); });
@@ -154,7 +154,31 @@
 
         ws.on('speech_start', (data) => setBroadcast(data.message));
 
-        ws.on('voting_start', (data) => { renderVoting(data); setBroadcast(data.message); });
+        ws.on('voting_start', (data) => {
+            lastVotingData = data;
+            renderVoting(data);
+            setBroadcast(data.message);
+        });
+
+        ws.on('butler_wait', (data) => {
+            const panel = $('#action-panel');
+            if (panel) {
+                panel.classList.remove('hidden');
+                panel.innerHTML = `
+                    <div style="text-align:center;color:var(--accent-gold);font-size:0.88rem;padding:0.5rem;">
+                        ${data.message}
+                    </div>
+                `;
+            }
+        });
+
+        ws.on('butler_unlocked', (data) => {
+            if (lastVotingData) {
+                const masterText = data.master_vote ? '赞成' : '反对';
+                showToast(`主人投了${masterText}票`, 'info');
+                renderVoting(lastVotingData, !data.master_vote);
+            }
+        });
 
         ws.on('vote_result', (data) => {
             addLogHTML(`${ptag(data.nominee_seat, data.nominee_name)}: ${data.yes_votes}票赞成 (需要${data.needed}票)`, 'vote');
@@ -200,6 +224,20 @@
         ws.on('chat', (data) => addChatMessage(data.sender_name, data.text));
         ws.on('end_nom_proposal', (data) => { showToast(data.message, 'info'); setBroadcast(data.message); });
         ws.on('end_nom_rejected', (data) => { addLogHTML(fmtLog(data.message), 'event'); showToast(data.message, 'warning'); });
+
+        ws.on('restart_proposal', (data) => {
+            setBroadcast(data.message);
+            if (data.proposer_id !== playerId) {
+                showRestartVoteDialog(data);
+            }
+        });
+        ws.on('restart_rejected', (data) => {
+            addLogHTML(fmtLog(data.message), 'event');
+            setBroadcast(data.message);
+            const dlg = $('#restart-vote-dialog');
+            if (dlg) dlg.remove();
+        });
+
         ws.on('error', (data) => showToast(data.message, 'danger'));
 
         ws.connect();
@@ -224,10 +262,10 @@
         renderTownSquare();
         renderDayPanel();
         renderDayButtons();
+        renderRestartVote();
         renderHostControls();
         renderPrivate();
         renderLog();
-    
     }
 
     function renderPhase() {
@@ -282,10 +320,16 @@
             if (p.is_bot) tags += '<span class="seat-tag bot">BOT</span>';
             else if (p.id === gameState.host_id) tags += '<span class="seat-tag host">主</span>';
 
+            const voted = gameState.voted_players && gameState.voted_players.includes(p.id);
+            const endVoted = gameState.end_nomination_vote && gameState.end_nomination_vote.votes[p.id] !== undefined;
+            const restartVoted = gameState.restart_vote && gameState.restart_vote.votes[p.id] !== undefined;
+            const showCheck = voted || endVoted || restartVoted;
+
             seat.innerHTML = `
                 <span class="seat-number">${i + 1}</span>
                 <span class="seat-name">${esc(p.name)}</span>
                 ${!p.alive ? '<span class="seat-dead-mark">✕</span>' : ''}
+                ${showCheck ? '<span class="seat-check">✓</span>' : ''}
                 ${tags}
             `;
 
@@ -293,16 +337,34 @@
             sq.appendChild(seat);
 
             const mark = seatMarks[p.id] || '';
-            const markColor = MARK_COLOR_MAP[mark] || '';
-            const markEl = document.createElement('div');
+            const markColor = MARK_COLOR_MAP[mark] || (mark ? '#ccc' : '');
+            const markWrap = document.createElement('div');
+            markWrap.className = 'seat-mark-wrap';
+            markWrap.style.left = (x + 4.5) + '%';
+            markWrap.style.top = (y - 1) + '%';
+
+            const markEl = document.createElement('span');
             markEl.className = 'seat-mark' + (mark ? ' has-mark' : '');
-            markEl.style.left = (x + 4.5) + '%';
-            markEl.style.top = (y - 1) + '%';
             if (markColor) { markEl.style.color = markColor; markEl.style.borderColor = markColor; }
             markEl.textContent = mark || '·';
             markEl.title = '点击标注';
-            markEl.addEventListener('click', (e) => { e.stopPropagation(); openMarkPicker(p.id, markEl); });
-            sq.appendChild(markEl);
+            markEl.addEventListener('click', (e) => { e.stopPropagation(); openMarkPicker(p.id, markWrap); });
+            markWrap.appendChild(markEl);
+
+            if (mark) {
+                const clearBtn = document.createElement('span');
+                clearBtn.className = 'seat-mark-clear';
+                clearBtn.textContent = '✕';
+                clearBtn.title = '清除标注';
+                clearBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    delete seatMarks[p.id];
+                    localStorage.setItem(`bt_marks_${roomCode}`, JSON.stringify(seatMarks));
+                    renderTownSquare();
+                });
+                markWrap.appendChild(clearBtn);
+            }
+            sq.appendChild(markWrap);
         });
 
         const center = document.createElement('div');
@@ -333,12 +395,20 @@
         area.innerHTML = '';
 
         if (!privateState || !gameState) return;
-        if (!privateState.alive || gameState.phase !== 'day') return;
+        if (gameState.phase !== 'day') return;
 
         const btn = document.createElement('button');
         btn.className = 'btn btn-danger btn-block btn-sm mt-1';
         btn.textContent = '声称杀手并开枪';
-        btn.addEventListener('click', () => enterSlayerMode());
+
+        const dead = !privateState.alive;
+        const used = privateState.used_ability;
+        if (dead || used) {
+            btn.disabled = true;
+            btn.title = dead ? '你已死亡' : '你已使用过此能力';
+        } else {
+            btn.addEventListener('click', () => enterSlayerMode());
+        }
         area.appendChild(btn);
     }
 
@@ -352,7 +422,7 @@
 
         if (data.info_type === 'spy_grimoire' && data.grimoire) {
             const table = document.createElement('div');
-            table.style.cssText = 'margin-top:0.3rem;font-size:0.72rem;';
+            table.style.cssText = 'margin-top:0.3rem;font-size:0.82rem;';
             data.grimoire.forEach(g => {
                 const row = document.createElement('div');
                 row.style.cssText = 'padding:0.1rem 0;display:flex;gap:0.3rem;align-items:center;';
@@ -386,7 +456,7 @@
         panel.appendChild(title);
 
         const hint = document.createElement('div');
-        hint.style.cssText = 'color:var(--text-secondary);font-size:0.72rem;margin-bottom:0.3rem;';
+        hint.style.cssText = 'color:var(--text-secondary);font-size:0.82rem;margin-bottom:0.3rem;';
         const chooseCount = data.choose_count || 1;
         hint.textContent = `在圆桌上点击选择 ${chooseCount} 名玩家`;
         panel.appendChild(hint);
@@ -406,7 +476,7 @@
 
         const selDisplay = document.createElement('div');
         selDisplay.id = 'night-sel-display';
-        selDisplay.style.cssText = 'color:var(--accent-gold);font-size:0.75rem;min-height:1.2rem;margin:0.2rem 0;';
+        selDisplay.style.cssText = 'color:var(--accent-gold);font-size:0.85rem;min-height:1.2rem;margin:0.2rem 0;';
         panel.appendChild(selDisplay);
 
         const confirmBtn = document.createElement('button');
@@ -495,7 +565,7 @@
 
             if (sub === 'nomination') {
                 const info = document.createElement('div');
-                info.style.cssText = 'text-align:center;margin-bottom:0.3rem;color:var(--text-secondary);font-size:0.72rem;';
+                info.style.cssText = 'text-align:center;margin-bottom:0.3rem;color:var(--text-secondary);font-size:0.82rem;';
                 info.textContent = `剩余提名次数：${gameState.nominations_remaining}`;
                 nomCtrl.appendChild(info);
 
@@ -505,7 +575,7 @@
                 renderSpeechUI(nomCtrl, sub);
             } else if (sub === 'voting') {
                 const info = document.createElement('div');
-                info.style.cssText = 'text-align:center;color:var(--accent-gold);font-size:0.75rem;font-weight:600;';
+                info.style.cssText = 'text-align:center;color:var(--accent-gold);font-size:0.85rem;font-weight:600;';
                 info.textContent = '投票进行中...';
                 nomCtrl.appendChild(info);
             }
@@ -547,6 +617,71 @@
                 container.appendChild(endBtn);
             }
         }
+    }
+
+    function renderRestartVote() {
+        const container = $('#restart-vote-area');
+        if (!container || !gameState) return;
+        container.innerHTML = '';
+
+        const phase = gameState.phase;
+        const inGame = phase === 'day' || phase === 'night' || phase === 'first_night';
+        if (!inGame) {
+            container.style.display = 'none';
+            return;
+        }
+        container.style.display = '';
+
+        const rv = gameState.restart_vote;
+        if (rv) {
+            const agreedCount = Object.values(rv.votes).filter(v => v).length;
+            const myVote = rv.votes[playerId];
+            const btn = document.createElement('button');
+            btn.className = 'btn btn-sm';
+            btn.style.cssText = 'font-size:0.72rem;padding:0.1rem 0.4rem;white-space:nowrap;';
+            if (myVote === undefined) {
+                btn.className += ' btn-danger';
+                btn.textContent = `重开? ${agreedCount}/${rv.needed}`;
+                btn.title = '点击投票';
+                btn.addEventListener('click', () => showRestartVoteDialog(rv));
+            } else {
+                btn.className += ' btn-secondary';
+                btn.textContent = `重开 ${agreedCount}/${rv.needed}`;
+                btn.disabled = true;
+                btn.title = '等待其他玩家投票';
+            }
+            container.appendChild(btn);
+        } else {
+            const btn = document.createElement('button');
+            btn.className = 'btn btn-secondary btn-sm';
+            btn.style.cssText = 'font-size:0.72rem;padding:0.1rem 0.4rem;';
+            btn.textContent = '重开';
+            btn.title = '发起重开投票';
+            btn.addEventListener('click', () => ws.send('propose_restart'));
+            container.appendChild(btn);
+        }
+    }
+
+    function showRestartVoteDialog(data) {
+        const existing = $('#restart-vote-dialog');
+        if (existing) existing.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'restart-vote-dialog';
+        overlay.className = 'ingame-confirm-overlay';
+        overlay.innerHTML = `
+            <div class="ingame-confirm-box">
+                <div style="margin-bottom:0.5rem;font-size:0.92rem;">
+                    ${ptag(data.proposer_seat, data.proposer_name)} 发起了重开投票
+                </div>
+                <div style="display:flex;gap:0.4rem;">
+                    <button class="btn btn-success" style="flex:1" id="rv-yes">同意</button>
+                    <button class="btn btn-danger" style="flex:1" id="rv-no">拒绝</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        overlay.querySelector('#rv-yes').addEventListener('click', () => { overlay.remove(); ws.send('vote_restart', { agree: true }); });
+        overlay.querySelector('#rv-no').addEventListener('click', () => { overlay.remove(); ws.send('vote_restart', { agree: false }); });
     }
 
     function enterNominationMode() {
@@ -605,7 +740,7 @@
         const div = document.createElement('div');
         div.style.cssText = 'text-align:center;margin-bottom:0.3rem;';
         div.innerHTML = `
-            <div style="color:var(--accent-gold);font-size:0.78rem;font-weight:600;margin-bottom:0.2rem;">${label}</div>
+            <div style="color:var(--accent-gold);font-size:0.88rem;font-weight:600;margin-bottom:0.2rem;">${label}</div>
             <div style="color:var(--text-primary);font-size:0.82rem;">${ptag(speech.player_seat, speech.player_name)} 发言中...</div>
         `;
         parent.appendChild(div);
@@ -619,22 +754,30 @@
         }
     }
 
-    function renderVoting(data) {
+    function renderVoting(data, disableYes) {
         const panel = $('#action-panel');
         if (!panel) return;
-        if (data.nominator === playerId) return;
 
         const me = gameState && gameState.players.find(p => p.id === playerId);
-        const isDead = me && !me.alive;
+        if (!me) return;
+        const isDead = !me.alive;
+        if (isDead && !me.has_vote_token) return;
         const noLabel = isDead ? '弃权' : '反对';
+
+        const yesDisabled = disableYes ? 'disabled' : '';
+        const yesHint = disableYes ? '<div style="font-size:0.78rem;color:var(--text-muted);margin-top:0.2rem;">主人未投赞成，你无法赞成</div>' : '';
 
         panel.classList.remove('hidden');
         panel.innerHTML = `
-            <h3>对 ${ptag(data.nominee_seat, data.nominee_name)} 的投票</h3>
+            <div style="margin-bottom:0.3rem;font-size:0.82rem;color:var(--text-secondary);">
+                ${ptag(data.nominator_seat, data.nominator_name)} 提名了 ${ptag(data.nominee_seat, data.nominee_name)}
+            </div>
+            <h3>是否处决 ${ptag(data.nominee_seat, data.nominee_name)}？</h3>
             <div class="vote-section">
-                <button class="btn btn-success btn-sm" id="btn-vote-yes">赞成处决</button>
+                <button class="btn btn-success btn-sm" id="btn-vote-yes" ${yesDisabled}>赞成处决</button>
                 <button class="btn btn-secondary btn-sm" id="btn-vote-no">${noLabel}</button>
             </div>
+            ${yesHint}
         `;
         $('#btn-vote-yes').addEventListener('click', () => {
             ws.send('vote', { vote: true });
@@ -655,9 +798,9 @@
 
         const agreedCount = Object.values(endVote.votes).filter(v => v).length;
         statusDiv.innerHTML = `
-            <div style="margin-bottom:0.3rem;font-size:0.72rem;">
+            <div style="margin-bottom:0.3rem;font-size:0.82rem;">
                 ${ptag(endVote.proposer_seat, endVote.proposer_name)} 提议结束提名
-                <span style="color:var(--text-muted);font-size:0.68rem;">(${agreedCount}/${endVote.needed} 同意)</span>
+                <span style="color:var(--text-muted);font-size:0.78rem;">(${agreedCount}/${endVote.needed} 同意)</span>
             </div>
         `;
 
@@ -680,7 +823,7 @@
             btnRow.appendChild(rejectBtn);
             statusDiv.appendChild(btnRow);
         } else if (myVote === true) {
-            statusDiv.innerHTML += '<div style="color:var(--accent-green);font-size:0.72rem;">你已同意</div>';
+            statusDiv.innerHTML += '<div style="color:var(--accent-green);font-size:0.82rem;">你已同意</div>';
         }
 
         parent.appendChild(statusDiv);
@@ -729,7 +872,11 @@
             btn.className = 'btn btn-primary btn-block btn-sm';
             btn.textContent = `开始游戏 (${gameState.players.length} 人)`;
             btn.disabled = gameState.players.length < 5;
-            btn.addEventListener('click', () => ws.send('start_game'));
+            btn.addEventListener('click', () => {
+                btn.disabled = true;
+                btn.textContent = '正在开始...';
+                ws.send('start_game');
+            });
             wrapper.appendChild(btn);
 
             panel.appendChild(wrapper);
@@ -756,10 +903,10 @@
                 <p style="text-align:center;color:var(--text-secondary);margin-bottom:0.75rem;font-size:0.82rem;">${esc(data.message)}</p>
 
                 <div style="margin-bottom:0.75rem;">
-                    <div style="color:var(--accent-gold);font-weight:600;font-size:0.78rem;margin-bottom:0.3rem;">阵营一览</div>
+                    <div style="color:var(--accent-gold);font-weight:600;font-size:0.88rem;margin-bottom:0.3rem;">阵营一览</div>
                     <div class="review-teams">
                         <div class="review-team">
-                            <div style="color:var(--accent-blue);font-weight:600;font-size:0.75rem;margin-bottom:0.2rem;">好人阵营</div>
+                            <div style="color:var(--accent-blue);font-weight:600;font-size:0.85rem;margin-bottom:0.2rem;">好人阵营</div>
                             ${goodPlayers.map(p => `
                                 <div class="review-player ${p.alive ? '' : 'dead'}">
                                     ${ptag(p.seat || '?', p.name)}
@@ -768,7 +915,7 @@
                             `).join('')}
                         </div>
                         <div class="review-team">
-                            <div style="color:var(--accent-red);font-weight:600;font-size:0.75rem;margin-bottom:0.2rem;">邪恶阵营</div>
+                            <div style="color:var(--accent-red);font-weight:600;font-size:0.85rem;margin-bottom:0.2rem;">邪恶阵营</div>
                             ${evilPlayers.map(p => `
                                 <div class="review-player ${p.alive ? '' : 'dead'}">
                                     ${ptag(p.seat || '?', p.name)}
@@ -781,7 +928,7 @@
 
                 ${logs.length > 0 ? `
                 <div style="margin-bottom:0.75rem;">
-                    <div style="color:var(--accent-gold);font-weight:600;font-size:0.78rem;margin-bottom:0.3rem;">关键事件</div>
+                    <div style="color:var(--accent-gold);font-weight:600;font-size:0.88rem;margin-bottom:0.3rem;">关键事件</div>
                     <div class="review-events">
                         ${logs.map(l => `<div class="review-event">${fmtLog(l)}</div>`).join('')}
                     </div>
@@ -898,7 +1045,7 @@
     const PLAYER_DIST = {
         5:  [3, 0, 1, 1],
         6:  [3, 1, 1, 1],
-        7:  [5, 0, 1, 1],
+        7:  [4, 1, 1, 1],
         8:  [5, 1, 1, 1],
         9:  [5, 2, 1, 1],
         10: [7, 0, 2, 1],
@@ -943,7 +1090,7 @@
                 </thead>
                 <tbody>${rows}</tbody>
             </table>
-            <div style="margin-top:0.5rem;font-size:0.68rem;color:var(--text-muted);">
+            <div style="margin-top:0.5rem;font-size:0.78rem;color:var(--text-muted);">
                 * 如果场上有男爵，外来者+2，村民-2
             </div>
         `;
@@ -983,17 +1130,6 @@
         picker.id = 'mark-picker';
         picker.className = 'mark-picker';
 
-        const clearBtn = document.createElement('button');
-        clearBtn.className = 'mark-opt mark-clear' + (!seatMarks[pid] ? ' active' : '');
-        clearBtn.textContent = '✕ 清除';
-        clearBtn.addEventListener('click', () => {
-            delete seatMarks[pid];
-            localStorage.setItem(`bt_marks_${roomCode}`, JSON.stringify(seatMarks));
-            picker.remove();
-            renderTownSquare();
-        });
-        picker.appendChild(clearBtn);
-
         MARK_GROUPS.forEach(group => {
             const row = document.createElement('div');
             row.className = 'mark-group';
@@ -1019,12 +1155,50 @@
             picker.appendChild(row);
         });
 
+        const customRow = document.createElement('div');
+        customRow.className = 'mark-group mark-custom-row';
+        const customLbl = document.createElement('span');
+        customLbl.className = 'mark-group-label';
+        customLbl.textContent = '自定义';
+        customLbl.style.color = '#aaa';
+        customRow.appendChild(customLbl);
+        const customInput = document.createElement('input');
+        customInput.type = 'text';
+        customInput.className = 'mark-custom-input';
+        customInput.maxLength = 6;
+        customInput.placeholder = '输入标签…';
+        const curMark = seatMarks[pid] || '';
+        if (curMark && !MARK_COLOR_MAP[curMark]) customInput.value = curMark;
+        const applyCustom = () => {
+            const val = customInput.value.trim();
+            if (!val) return;
+            seatMarks[pid] = val;
+            localStorage.setItem(`bt_marks_${roomCode}`, JSON.stringify(seatMarks));
+            picker.remove();
+            renderTownSquare();
+        };
+        customInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') applyCustom(); });
+        customRow.appendChild(customInput);
+        const customBtn = document.createElement('button');
+        customBtn.className = 'mark-opt mark-custom-confirm';
+        customBtn.textContent = '✓';
+        customBtn.addEventListener('click', applyCustom);
+        customRow.appendChild(customBtn);
+        picker.appendChild(customRow);
+
         const rect = anchorEl.getBoundingClientRect();
         picker.style.position = 'fixed';
-        picker.style.left = rect.left + 'px';
-        picker.style.top = (rect.bottom + 4) + 'px';
         picker.style.zIndex = '80';
         document.body.appendChild(picker);
+        const pickerH = picker.offsetHeight;
+        const spaceBelow = window.innerHeight - rect.bottom;
+        if (spaceBelow < pickerH + 8) {
+            picker.style.left = rect.left + 'px';
+            picker.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+        } else {
+            picker.style.left = rect.left + 'px';
+            picker.style.top = (rect.bottom + 4) + 'px';
+        }
 
         const closePicker = (e) => {
             if (!picker.contains(e.target)) { picker.remove(); document.removeEventListener('mousedown', closePicker); }

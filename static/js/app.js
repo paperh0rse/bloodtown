@@ -66,10 +66,18 @@
     // --- Create room ---
     $('#btn-create')?.addEventListener('click', async () => {
         if (!ensureName()) return;
-        const res = await fetch('/api/rooms', { method: 'POST' });
-        const data = await res.json();
-        if (data.room_code) {
-            window.location.href = `/game/${data.room_code}`;
+        const btn = $('#btn-create');
+        btn.disabled = true;
+        btn.textContent = '创建中...';
+        try {
+            const res = await fetch('/api/rooms', { method: 'POST' });
+            const data = await res.json();
+            if (data.room_code) {
+                window.location.href = `/game/${data.room_code}`;
+            }
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '创建房间';
         }
     });
 

@@ -43,6 +43,9 @@ class Game:
         # Demon bluffs (3 good roles not in play)
         self.demon_bluffs: list[str] = []
 
+        # Per-player night info history (for reconnect replay)
+        self._player_night_info: dict[str, list[dict[str, Any]]] = {}
+
         # Game log (public events)
         self.log: list[dict[str, Any]] = []
 
@@ -52,6 +55,7 @@ class Game:
         self._current_nominee: str = ""
         self._votes: dict[str, bool] = {}
         self._vote_eligible_count: int = 0
+        self._butler_blocked: set[str] = set()
         self._vote_tally: dict[str, int] = {}  # nominee -> vote count
         self._highest_vote: tuple[str, int] = ("", 0)
         self._nominations_remaining: int = 0
@@ -63,6 +67,10 @@ class Game:
         self._last_night_msg: str = ""
 
         self._game_task: asyncio.Task | None = None
+
+        # Restart vote
+        self._restart_proposer: str = ""
+        self._restart_votes: dict[str, bool] = {}
 
     # ------------------------------------------------------------------
     # Player management
@@ -144,7 +152,15 @@ class Game:
         demon_pool = get_roles_by_team(Team.DEMON)
 
         chosen_demons = random.sample(demon_pool, dem_count)
-        chosen_minions = random.sample(minion_pool, min_count)
+
+        # Exclude Baron if +2 outsiders would leave fewer than 2 townsfolk
+        effective_minion_pool = minion_pool
+        baron_tf = n - min(out_count + 2, len(outsider_pool)) - min_count - dem_count
+        if baron_tf < 2:
+            effective_minion_pool = [r for r in minion_pool if r.id != "baron"]
+            if len(effective_minion_pool) < min_count:
+                effective_minion_pool = minion_pool
+        chosen_minions = random.sample(effective_minion_pool, min_count)
 
         # Baron modifies distribution
         has_baron = any(r.id == "baron" for r in chosen_minions)
@@ -171,6 +187,7 @@ class Game:
             role = all_roles[i]
             p = self.players[pid]
             p.role_id = role.id
+            p.original_role_id = role.id
             p.apparent_role_id = ""
             p.alignment = Alignment.EVIL if role.team in (Team.MINION, Team.DEMON) else Alignment.GOOD
             p.alive = True
@@ -242,6 +259,8 @@ class Game:
                 "player_seat": (sp.seat + 1) if sp else 0,
             }
 
+        voted_players = list(self._votes.keys()) if self.day_sub == DaySubPhase.VOTING else []
+
         return {
             "phase": self.phase.value,
             "day_sub": self.day_sub.value if self.phase in (GamePhase.DAY, GamePhase.FIRST_NIGHT, GamePhase.NIGHT) else "",
@@ -256,7 +275,9 @@ class Game:
             "speech_order": self._day_speech_order if self.phase == GamePhase.DAY else None,
             "nominators_today": list(self._nominators_today),
             "nominated_today": list(self._nominated_today),
+            "voted_players": voted_players,
             "log": self.log[-20:],
+            "restart_vote": self._restart_vote_state(),
         }
 
     def private_state(self, player_id: str) -> dict[str, Any]:
@@ -280,12 +301,14 @@ class Game:
     # ------------------------------------------------------------------
 
     async def start_game(self) -> None:
+        if self.phase != GamePhase.LOBBY:
+            return
+        self.phase = GamePhase.SETUP
         random.shuffle(self.seat_order)
         for i, pid in enumerate(self.seat_order):
             self.players[pid].seat = i
 
         self.assign_roles()
-        self.phase = GamePhase.SETUP
 
         for pid in self.seat_order:
             await manager.send_personal(self.room_code, pid, "role_assigned", self.private_state(pid))
@@ -345,7 +368,7 @@ class Game:
         for mpid in minion_pids:
             fellow = [self._ptag(self.players[mid]) for mid in minion_pids if mid != mpid]
             fellow_str = f"，同伴爪牙：{', '.join(fellow)}" if fellow else ""
-            await manager.send_personal(self.room_code, mpid, "night_info", {
+            await self._send_night_info(mpid, {
                 "info_type": "minion_info",
                 "message": f"你的恶魔是 {self._ptag(demon_p)}{fellow_str}",
             })
@@ -359,7 +382,7 @@ class Game:
             return
 
         minion_names = ", ".join(self._ptag(self.players[mid]) for mid in minion_pids) or "无"
-        await manager.send_personal(self.room_code, demon_pid, "night_info", {
+        await self._send_night_info(demon_pid, {
             "info_type": "demon_info",
             "message": f"你的爪牙：{minion_names}",
         })
@@ -391,23 +414,23 @@ class Game:
     async def _process_night_actions(self, first_night: bool) -> None:
         order_attr = "first_night_order" if first_night else "other_night_order"
 
-        acting_players: list[tuple[int, str]] = []
+        acting_players: list[tuple[int, str, str]] = []
         for pid in self.seat_order:
             p = self.players[pid]
             if not p.alive:
                 continue
-            role_def = ROLE_BY_ID.get(p.role_id)
+            # Drunk acts as their apparent role (but drunk, so info is false)
+            acting_role = p.apparent_role_id if p.drunk and p.apparent_role_id else p.role_id
+            role_def = ROLE_BY_ID.get(acting_role)
             if not role_def:
                 continue
             order_val = getattr(role_def, order_attr, 0)
             if order_val > 0:
-                acting_players.append((order_val, pid))
+                acting_players.append((order_val, pid, acting_role))
 
         acting_players.sort(key=lambda x: x[0])
 
-        for _, pid in acting_players:
-            p = self.players[pid]
-            role_id = p.role_id
+        for _, pid, role_id in acting_players:
 
             if role_id == "poisoner":
                 await self._action_poisoner(pid, first_night)
@@ -415,8 +438,6 @@ class Game:
                 await self._action_monk(pid)
             elif role_id == "imp" and not first_night:
                 await self._action_imp(pid)
-            elif role_id == "ravenkeeper" and not first_night:
-                await self._action_ravenkeeper(pid)
             elif role_id == "washerwoman" and first_night:
                 await self._action_washerwoman(pid)
             elif role_id == "librarian" and first_night:
@@ -501,10 +522,14 @@ class Game:
                 new_imp = random.choice(alive_minions)
                 new_imp.role_id = "imp"
                 new_imp.alignment = Alignment.EVIL
-                await manager.send_personal(self.room_code, new_imp.player_id, "night_info", {
+                await self._send_night_info(new_imp.player_id, {
                     "info_type": "became_demon",
                     "message": "小恶魔自杀了，你现在是新的小恶魔！",
                 })
+                await manager.send_personal(
+                    self.room_code, new_imp.player_id,
+                    "private_state", self.private_state(new_imp.player_id),
+                )
             return
 
         # Check Soldier immunity
@@ -546,7 +571,7 @@ class Game:
             # Spy may register as good, Recluse may register as evil
             shown_role = self._apply_spy_recluse_registration(target, shown_role)
             role_def = ROLE_BY_ID.get(shown_role)
-            await manager.send_personal(self.room_code, pid, "night_info", {
+            await self._send_night_info(pid, {
                 "info_type": "ravenkeeper_result",
                 "message": f"{self._ptag(target)} 的角色是 {role_def.name_zh if role_def else shown_role}。",
                 "target_name": target.name,
@@ -593,7 +618,6 @@ class Game:
             pp for pp in self.players.values()
             if pp.player_id != pid and ROLE_BY_ID.get(pp.role_id) is not None
             and ROLE_BY_ID[pp.role_id].team == Team.OUTSIDER
-            and pp.role_id != "drunk"  # Drunk appears as townsfolk to themselves
         ]
 
         if is_drunk_or_poisoned:
@@ -605,7 +629,7 @@ class Game:
             return
 
         if not outsider_players:
-            await manager.send_personal(self.room_code, pid, "night_info", {
+            await self._send_night_info(pid, {
                 "info_type": "librarian_result",
                 "message": "没有外来者在场。",
                 "player1": None, "player2": None, "role_id": None,
@@ -663,7 +687,7 @@ class Game:
                 if self._registers_as_evil(sp) and self._registers_as_evil(np):
                     count += 1
 
-        await manager.send_personal(self.room_code, pid, "night_info", {
+        await self._send_night_info(pid, {
             "info_type": "chef_result",
             "message": f"有 {count} 对邪恶玩家相邻而坐。",
             "count": count,
@@ -671,6 +695,8 @@ class Game:
 
     async def _action_empath(self, pid: str) -> None:
         p = self.players[pid]
+        if not p.alive:
+            return
         is_drunk_or_poisoned = p.poisoned or p.drunk
 
         left, right = self._alive_neighbours(pid)
@@ -682,7 +708,7 @@ class Game:
                 if nb and self._registers_as_evil(nb):
                     count += 1
 
-        await manager.send_personal(self.room_code, pid, "night_info", {
+        await self._send_night_info(pid, {
             "info_type": "empath_result",
             "message": f"你的存活邻居中有 {count} 个邪恶玩家。",
             "count": count,
@@ -690,6 +716,8 @@ class Game:
 
     async def _action_fortune_teller(self, pid: str) -> None:
         p = self.players[pid]
+        if not p.alive:
+            return
         targets = [pp for pp in self.players.values() if pp.player_id != pid]
         chosen = await self._ask_player_choose_two(
             pid, "fortune_teller_pick",
@@ -723,7 +751,7 @@ class Game:
                     has_demon = True
 
         names = [self._ptag(self.players[c]) for c in chosen if c in self.players]
-        await manager.send_personal(self.room_code, pid, "night_info", {
+        await self._send_night_info(pid, {
             "info_type": "fortune_teller_result",
             "message": f"{'、'.join(names)} 中{'有' if has_demon else '没有'}恶魔。",
             "has_demon": has_demon,
@@ -732,6 +760,8 @@ class Game:
 
     async def _action_undertaker(self, pid: str) -> None:
         p = self.players[pid]
+        if not p.alive:
+            return
         if not self._executed_today:
             return
         executed = self.players.get(self._executed_today)
@@ -746,7 +776,7 @@ class Game:
             shown_role = self._apply_spy_recluse_registration(executed, shown_role)
 
         role_def = ROLE_BY_ID.get(shown_role)
-        await manager.send_personal(self.room_code, pid, "night_info", {
+        await self._send_night_info(pid, {
             "info_type": "undertaker_result",
             "message": f"今天被处决的 {self._ptag(executed)} 的角色是 {role_def.name_zh if role_def else shown_role}。",
             "executed_name": executed.name,
@@ -756,6 +786,8 @@ class Game:
 
     async def _action_butler(self, pid: str) -> None:
         p = self.players[pid]
+        if not p.alive:
+            return
         targets = [pp for pp in self.alive_players() if pp.player_id != pid]
         target_id = await self._ask_player_choose(
             pid, "butler_master",
@@ -782,7 +814,7 @@ class Game:
                 "alignment": sp.alignment.value,
                 "alive": sp.alive,
             })
-        await manager.send_personal(self.room_code, pid, "night_info", {
+        await self._send_night_info(pid, {
             "info_type": "spy_grimoire",
             "message": "你查看了魔典，以下是所有玩家的角色：",
             "grimoire": grimoire,
@@ -826,7 +858,7 @@ class Game:
             scarlet = self._find_scarlet_woman()
             if scarlet and self.alive_count() >= 5:
                 scarlet.role_id = "imp"
-                await manager.send_personal(self.room_code, scarlet.player_id, "night_info", {
+                await self._send_night_info(scarlet.player_id, {
                     "info_type": "became_demon",
                     "message": "恶魔已死，你现在是新的小恶魔！",
                 })
@@ -850,6 +882,7 @@ class Game:
         self._nominators_today = set()
         self._current_nominee = ""
         self._votes = {}
+        self._butler_blocked = set()
         self._vote_tally = {}
         self._highest_vote = ("", 0)
         self._nominations_remaining = self.alive_count()
@@ -1007,25 +1040,34 @@ class Game:
         self._vote_eligible_count = sum(
             1 for pp in self.players.values() if pp.alive or pp.has_vote_token
         )
-        self._votes = {nominator_id: True}
+        self._votes = {}
+        self._butler_blocked: set[str] = set()
         await manager.broadcast(self.room_code, "game_state", self.public_state())
         await manager.broadcast(self.room_code, "voting_start", {
             "nominee": nominee_id,
             "nominee_name": nominee.name,
             "nominee_seat": nominee.seat + 1,
             "nominator": nominator_id,
+            "nominator_name": nominator.name,
+            "nominator_seat": nominator.seat + 1,
             "message": f"对 {self._ptag(nominee)} 的投票开始！",
         })
+
+        # Notify butlers that they must wait for their master
+        for pid_b in self.seat_order:
+            bp = self.players[pid_b]
+            if bp.alive and bp.role_id == "butler" and bp.butler_master_id and not bp.is_bot:
+                master = self.players.get(bp.butler_master_id)
+                master_eligible = master and (master.alive or master.has_vote_token)
+                if master_eligible:
+                    self._butler_blocked.add(pid_b)
+                    await manager.send_personal(self.room_code, pid_b, "butler_wait", {
+                        "message": "等待你的主人投票后再做选择...",
+                    })
 
         bot_vote_task = asyncio.create_task(self._bot_auto_vote())
         await self._wait_for_signal("voting_complete", timeout=60)
         bot_vote_task.cancel()
-
-        # Butler rule: nominator's auto-yes is voided if butler's master didn't vote yes
-        if nominator.role_id == "butler" and nominator.butler_master_id:
-            master_voted = self._votes.get(nominator.butler_master_id)
-            if not master_voted:
-                self._votes[nominator_id] = False
 
         # Tally
         yes_votes = sum(1 for v in self._votes.values() if v)
@@ -1067,6 +1109,7 @@ class Game:
 
         self._nominations_remaining -= 1
         self.day_sub = DaySubPhase.NOMINATION
+        await manager.broadcast(self.room_code, "game_state", self.public_state())
 
     async def _execute_player(self, player_id: str) -> None:
         p = self.players.get(player_id)
@@ -1099,7 +1142,7 @@ class Game:
             scarlet = self._find_scarlet_woman()
             if scarlet and self.alive_count() >= 5:
                 scarlet.role_id = "imp"
-                await manager.send_personal(self.room_code, scarlet.player_id, "night_info", {
+                await self._send_night_info(scarlet.player_id, {
                     "info_type": "became_demon",
                     "message": "恶魔被处决了，你现在是新的小恶魔！",
                 })
@@ -1173,22 +1216,42 @@ class Game:
             return
         if voter_id in self._votes:
             return
+        if voter_id in self._butler_blocked:
+            return
 
-        # Butler restriction
-        if p.role_id == "butler" and p.butler_master_id:
+        # Butler restriction: cannot vote yes unless master voted yes
+        if vote and p.alive and p.role_id == "butler" and p.butler_master_id:
             master_voted = self._votes.get(p.butler_master_id)
-            if vote and (master_voted is None or not master_voted):
-                await manager.send_personal(self.room_code, voter_id, "error", {
-                    "message": "你的主人还未投赞成票，你不能投赞成票。"
-                })
+            if not master_voted:
                 return
 
         self._votes[voter_id] = vote
         if not p.alive and vote:
             p.has_vote_token = False
 
+        await manager.broadcast(self.room_code, "game_state", self.public_state())
+
+        # Unlock any butler whose master just voted
+        await self._check_butler_unlock(voter_id)
+
         if len(self._votes) >= self._vote_eligible_count:
             self.handle_signal("voting_complete")
+
+    async def _check_butler_unlock(self, master_id: str) -> None:
+        """When a player votes, check if any blocked butler has them as master."""
+        to_unlock = [
+            bid for bid in self._butler_blocked
+            if self.players[bid].butler_master_id == master_id
+        ]
+        for bid in to_unlock:
+            self._butler_blocked.discard(bid)
+            master = self.players[master_id]
+            master_vote = self._votes.get(master_id)
+            vote_text = "赞成" if master_vote else "反对"
+            await manager.send_personal(self.room_code, bid, "butler_unlocked", {
+                "master_vote": master_vote,
+                "message": f"你的主人 {self._ptag(master)} 投了{vote_text}票，现在轮到你投票。",
+            })
 
     async def handle_propose_end_nominations(self, proposer_id: str) -> None:
         """Any alive player can propose to end nominations early."""
@@ -1291,18 +1354,33 @@ class Game:
     async def _bot_auto_vote(self) -> None:
         """Bots cast random votes immediately."""
         await asyncio.sleep(0.1)
+        # First pass: non-butler bots
         for pid in self.seat_order:
             p = self.players[pid]
             if not p.is_bot:
                 continue
             if not p.alive and not p.has_vote_token:
                 continue
+            if p.alive and p.role_id == "butler" and p.butler_master_id:
+                continue  # handle after master votes
             vote = random.random() < 0.5
             if not p.alive and not vote:
-                vote = False  # dead bot abstains — record as False, don't consume token
+                vote = False
             self._votes[pid] = vote
             if not p.alive and vote:
                 p.has_vote_token = False
+        # Second pass: butler bots (master has now voted)
+        for pid in self.seat_order:
+            p = self.players[pid]
+            if not p.is_bot or not p.alive:
+                continue
+            if not (p.role_id == "butler" and p.butler_master_id):
+                continue
+            master_voted = self._votes.get(p.butler_master_id)
+            vote = random.random() < 0.5
+            if vote and not master_voted:
+                vote = False
+            self._votes[pid] = vote
 
         if len(self._votes) >= self._vote_eligible_count:
             self.handle_signal("voting_complete")
@@ -1324,8 +1402,10 @@ class Game:
             return
 
         is_real_slayer = p.effective_role_id() == "slayer" and not p.used_ability
-        if is_real_slayer:
-            p.used_ability = True
+        p.used_ability = True
+        await manager.send_personal(
+            self.room_code, slayer_id, "private_state", self.private_state(slayer_id),
+        )
 
         role_def = ROLE_BY_ID.get(target.role_id)
         is_demon = role_def and role_def.team == Team.DEMON
@@ -1341,7 +1421,17 @@ class Game:
                 "slayer": slayer_id, "target": target_id,
             })
             await manager.broadcast(self.room_code, "game_state", self.public_state())
-            await self._end_game("good", f"{pt} 杀死了恶魔，好人阵营获胜！")
+            scarlet = self._find_scarlet_woman()
+            if scarlet and self.alive_count() >= 5:
+                scarlet.role_id = "imp"
+                await manager.send_personal(
+                    self.room_code, scarlet.player_id, "private_state",
+                    self.private_state(scarlet.player_id),
+                )
+                self._add_log("event", "恶魔被击杀...但邪恶的力量似乎并未消散。")
+                await manager.broadcast(self.room_code, "game_state", self.public_state())
+            else:
+                await self._end_game("good", f"{pt} 杀死了恶魔，好人阵营获胜！")
         else:
             self._add_log("ability", f"{pt} 声称自己是杀手，对 {tt} 开枪——但什么也没发生。")
             await manager.broadcast(self.room_code, "slayer_fail", {
@@ -1380,6 +1470,17 @@ class Game:
         evt = self._signal_events.get(signal_name)
         if evt:
             evt.set()
+
+    # ------------------------------------------------------------------
+    # Night info helper (send + store for reconnect)
+    # ------------------------------------------------------------------
+
+    async def _send_night_info(self, player_id: str, data: dict[str, Any]) -> None:
+        self._player_night_info.setdefault(player_id, []).append(data)
+        await manager.send_personal(self.room_code, player_id, "night_info", data)
+
+    def get_player_night_info(self, player_id: str) -> list[dict[str, Any]]:
+        return self._player_night_info.get(player_id, [])
 
     # ------------------------------------------------------------------
     # Player choice helpers
@@ -1464,7 +1565,7 @@ class Game:
         role_def = ROLE_BY_ID.get(role_id)
         pair = [player_a, player_b]
         random.shuffle(pair)
-        await manager.send_personal(self.room_code, receiver_pid, "night_info", {
+        await self._send_night_info(receiver_pid, {
             "info_type": f"{info_type}_result",
             "message": f"{self._ptag(pair[0])} 和 {self._ptag(pair[1])} 中有一个是{role_def.name_zh if role_def else role_id}。",
             "player1": {"id": pair[0].player_id, "name": pair[0].name},
@@ -1533,12 +1634,13 @@ class Game:
         reveal = []
         for pid in self.seat_order:
             p = self.players[pid]
-            rd = ROLE_BY_ID.get(p.role_id)
+            show_role = p.original_role_id or p.role_id
+            rd = ROLE_BY_ID.get(show_role)
             reveal.append({
                 "id": pid,
                 "name": p.name,
                 "seat": p.seat + 1,
-                "role_id": p.role_id,
+                "role_id": show_role,
                 "role_name": rd.name_zh if rd else "???",
                 "alignment": p.alignment.value,
                 "alive": p.alive,
@@ -1556,6 +1658,92 @@ class Game:
             "players": reveal,
             "log_summary": log_summary,
         })
+
+    # ------------------------------------------------------------------
+    # Restart vote
+    # ------------------------------------------------------------------
+
+    def _restart_vote_state(self) -> dict | None:
+        if not self._restart_proposer:
+            return None
+        proposer = self.players.get(self._restart_proposer)
+        return {
+            "proposer_id": self._restart_proposer,
+            "proposer_name": proposer.name if proposer else "???",
+            "proposer_seat": (proposer.seat + 1) if proposer else 0,
+            "votes": dict(self._restart_votes),
+            "needed": len([p for p in self.players.values() if not p.is_bot]),
+        }
+
+    async def handle_propose_restart(self, proposer_id: str) -> None:
+        p = self.players.get(proposer_id)
+        if not p:
+            return
+        if self.phase == GamePhase.LOBBY:
+            return
+        if self._restart_proposer:
+            await manager.send_personal(self.room_code, proposer_id, "error", {
+                "message": "已有一个重开投票正在进行中。",
+            })
+            return
+
+        self._restart_proposer = proposer_id
+        self._restart_votes = {proposer_id: True}
+
+        for pid in self.seat_order:
+            bp = self.players[pid]
+            if bp.is_bot:
+                self._restart_votes[pid] = True
+
+        if self._check_restart_passed():
+            await self._execute_restart()
+        else:
+            self._add_log("event", f"{self._ptag(p)} 发起了重开投票，等待所有玩家同意。")
+            await manager.broadcast(self.room_code, "game_state", self.public_state())
+            await manager.broadcast(self.room_code, "restart_proposal", {
+                "proposer_id": proposer_id,
+                "proposer_name": p.name,
+                "proposer_seat": p.seat + 1,
+                "message": f"{self._ptag(p)} 发起了重开投票，是否同意？",
+            })
+
+    async def handle_vote_restart(self, voter_id: str, agree: bool) -> None:
+        if not self._restart_proposer:
+            return
+        p = self.players.get(voter_id)
+        if not p:
+            return
+        if voter_id in self._restart_votes:
+            return
+
+        self._restart_votes[voter_id] = agree
+
+        if not agree:
+            self._add_log("event", f"{self._ptag(p)} 拒绝了重开投票。")
+            self._restart_proposer = ""
+            self._restart_votes = {}
+            await manager.broadcast(self.room_code, "restart_rejected", {
+                "message": f"{self._ptag(p)} 拒绝了重开投票。",
+            })
+            await manager.broadcast(self.room_code, "game_state", self.public_state())
+            return
+
+        if self._check_restart_passed():
+            await self._execute_restart()
+        else:
+            await manager.broadcast(self.room_code, "game_state", self.public_state())
+
+    def _check_restart_passed(self) -> bool:
+        all_humans = [pp for pp in self.players.values() if not pp.is_bot]
+        return all(self._restart_votes.get(pp.player_id) for pp in all_humans)
+
+    async def _execute_restart(self) -> None:
+        self._add_log("phase", "所有玩家同意重开，游戏即将重新开始。")
+        self._restart_proposer = ""
+        self._restart_votes = {}
+        await manager.broadcast(self.room_code, "game_state", self.public_state())
+        await asyncio.sleep(1)
+        await self.restart_game()
 
     # ------------------------------------------------------------------
     # Restart
@@ -1581,6 +1769,7 @@ class Game:
         self._nominators_today.clear()
         self._current_nominee = ""
         self._votes.clear()
+        self._butler_blocked.clear()
         self._vote_eligible_count = 0
         self._vote_tally.clear()
         self._highest_vote = ("", 0)
@@ -1591,9 +1780,13 @@ class Game:
         self._speech_player = ""
         self._day_speech_order = {}
         self._last_night_msg = ""
+        self._player_night_info.clear()
+        self._restart_proposer = ""
+        self._restart_votes.clear()
 
         for p in self.players.values():
             p.role_id = ""
+            p.original_role_id = ""
             p.apparent_role_id = ""
             p.alive = True
             p.has_vote_token = True

@@ -19,6 +19,10 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+html {
+    font-size: clamp(14px, 0.85vw, 18px);
+}
+
 html, body {
     height: 100%;
     font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -87,7 +91,7 @@ header .subtitle {
     border-radius: 4px;
     color: var(--text-secondary);
     cursor: pointer;
-    font-size: 0.78rem;
+    font-size: 0.88rem;
     padding: 0.15rem 0.5rem;
     transition: all 0.15s;
 }
@@ -109,7 +113,7 @@ main:has(.game-layout) {
 
 .game-layout {
     display: grid;
-    grid-template-columns: 220px 1fr 260px;
+    grid-template-columns: clamp(200px, 14vw, 320px) 1fr clamp(240px, 16vw, 380px);
     height: 100vh;
 }
 
@@ -133,12 +137,12 @@ main:has(.game-layout) {
     flex-shrink: 0;
 }
 
-.room-code { color: var(--text-secondary); font-size: 0.8rem; }
+.room-code { color: var(--text-secondary); font-size: 0.88rem; }
 .room-code strong { color: var(--accent-gold); letter-spacing: 2px; }
 
 .btn-leave {
     padding: 0.15rem 0.5rem;
-    font-size: 0.7rem;
+    font-size: 0.8rem;
     background: transparent;
     color: var(--text-muted);
     border: 1px solid var(--border-color);
@@ -167,7 +171,7 @@ main:has(.game-layout) {
 
 .game-log .log-entry {
     padding: 0.15rem 0;
-    font-size: 0.72rem;
+    font-size: 0.82rem;
     color: var(--text-secondary);
     border-bottom: 1px solid rgba(255, 255, 255, 0.03);
 }
@@ -196,7 +200,7 @@ main:has(.game-layout) {
 
 .chat-box .chat-msg {
     padding: 0.1rem 0;
-    font-size: 0.72rem;
+    font-size: 0.82rem;
     color: var(--text-secondary);
 }
 
@@ -235,7 +239,7 @@ main:has(.game-layout) {
     background: var(--bg-card);
     border: 1px solid var(--border-color);
     border-radius: var(--radius);
-    font-size: 0.78rem;
+    font-size: 0.88rem;
     color: var(--accent-gold);
     font-weight: 600;
     min-height: 1.6rem;
@@ -273,9 +277,9 @@ main:has(.game-layout) {
 
 .notebook {
     resize: none;
-    height: 140px;
+    height: clamp(100px, 12vh, 180px);
     line-height: 1.4;
-    font-size: 0.78rem;
+    font-size: 0.88rem;
 }
 
 /* ---- Right column ---- */
@@ -295,7 +299,7 @@ main:has(.game-layout) {
     flex-shrink: 0;
 }
 
-.night-info-scroll { max-height: 140px; overflow-y: auto; margin-top: 0.3rem; }
+.night-info-scroll { max-height: clamp(100px, 12vh, 200px); overflow-y: auto; margin-top: 0.3rem; }
 
 .nom-card {
     flex: 1;
@@ -331,7 +335,7 @@ main:has(.game-layout) {
 
 .card h2 {
     color: var(--accent-gold);
-    font-size: 0.78rem;
+    font-size: 0.88rem;
     margin-bottom: 0.35rem;
     border-bottom: 1px solid var(--border-color);
     padding-bottom: 0.2rem;
@@ -346,7 +350,7 @@ main:has(.game-layout) {
     padding: 0.4rem 0.8rem;
     border: none;
     border-radius: var(--radius);
-    font-size: 0.78rem;
+    font-size: 0.88rem;
     font-weight: 600;
     cursor: pointer;
     transition: all 0.2s;
@@ -362,7 +366,7 @@ main:has(.game-layout) {
 .btn-gold:hover:not(:disabled) { background: #e6b84d; }
 .btn-success { background: var(--accent-green); color: #fff; }
 .btn-danger { background: var(--accent-red); color: #fff; }
-.btn-sm { padding: 0.2rem 0.45rem; font-size: 0.72rem; }
+.btn-sm { padding: 0.2rem 0.45rem; font-size: 0.82rem; }
 .btn-block { display: flex; width: 100%; }
 
 /* ---- Inputs ---- */
@@ -373,7 +377,7 @@ input[type="text"], input[type="number"], textarea {
     border-radius: var(--radius);
     padding: 0.35rem 0.5rem;
     color: var(--text-primary);
-    font-size: 0.78rem;
+    font-size: 0.88rem;
     width: 100%;
     outline: none;
     transition: border-color 0.2s;
@@ -382,22 +386,22 @@ input[type="text"], input[type="number"], textarea {
 input:focus, textarea:focus { border-color: var(--accent-gold); }
 .input-group { display: flex; gap: 0.3rem; }
 .input-group input { flex: 1; }
-label { display: block; color: var(--text-secondary); font-size: 0.78rem; margin-bottom: 0.2rem; }
+label { display: block; color: var(--text-secondary); font-size: 0.88rem; margin-bottom: 0.2rem; }
 
 /* ---- Town Square ---- */
 
 .town-square {
     position: relative;
     width: 100%;
-    max-width: 480px;
+    max-width: clamp(360px, 32vw, 600px);
     aspect-ratio: 1.4;
     margin: 0 auto;
 }
 
 .town-square .seat {
     position: absolute;
-    width: 64px;
-    height: 64px;
+    width: clamp(56px, 5vw, 96px);
+    height: clamp(56px, 5vw, 96px);
     border-radius: 50%;
     background: var(--bg-secondary);
     border: 2px solid var(--border-color);
@@ -405,7 +409,7 @@ label { display: block; color: var(--text-secondary); font-size: 0.78rem; margin
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    font-size: 0.6rem;
+    font-size: clamp(0.6rem, 0.8vw, 0.85rem);
     cursor: pointer;
     transition: all 0.2s;
     text-align: center;
@@ -439,51 +443,75 @@ label { display: block; color: var(--text-secondary); font-size: 0.78rem; margin
 }
 
 .town-square .seat .seat-number {
-    position: absolute; top: -2px; left: 50%; transform: translateX(-50%);
-    font-size: 0.5rem; font-weight: 700; color: var(--accent-gold); line-height: 1;
+    position: absolute; top: -6px; left: 50%; transform: translateX(-50%);
+    font-size: clamp(1.1rem, 1.8vw, 2rem); font-weight: 700; color: var(--accent-gold); line-height: 1;
 }
 
 .town-square .seat .seat-name {
-    font-weight: 600; font-size: 0.62rem;
-    max-width: 56px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-weight: 600; font-size: clamp(0.65rem, 0.85vw, 1rem);
+    max-width: clamp(48px, 4.5vw, 80px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
 .town-square .seat .seat-dead-mark {
-    position: absolute; font-size: 1.2rem; color: var(--accent-red);
+    position: absolute; font-size: clamp(1rem, 1.3vw, 1.6rem); color: var(--accent-red);
     font-weight: 700; opacity: 0.8; pointer-events: none;
+}
+.town-square .seat .seat-check {
+    position: absolute; bottom: -2px; right: -4px;
+    font-size: clamp(0.45rem, 0.6vw, 0.7rem); color: #2ecc71; font-weight: 700;
+    background: rgba(0,0,0,0.6); border-radius: 50%;
+    width: clamp(0.7rem, 0.9vw, 1.1rem); height: clamp(0.7rem, 0.9vw, 1.1rem); line-height: clamp(0.7rem, 0.9vw, 1.1rem);
+    text-align: center; pointer-events: none;
 }
 
 .town-square .seat .seat-tag {
     position: absolute; bottom: -3px; left: 50%; transform: translateX(-50%);
-    font-size: 0.4rem; font-weight: 700; padding: 0 0.2rem; border-radius: 2px; line-height: 1.3;
+    font-size: clamp(0.35rem, 0.45vw, 0.55rem); font-weight: 700; padding: 0 0.2rem; border-radius: 2px; line-height: 1.3;
 }
 .town-square .seat .seat-tag.bot { background: #5865f2; color: #fff; }
 .town-square .seat .seat-tag.host { background: var(--accent-gold); color: #0d0d0d; }
 
 .town-square .center-info {
     position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-    text-align: center; color: var(--text-secondary); font-size: 0.8rem;
+    text-align: center; color: var(--text-secondary); font-size: clamp(0.7rem, 0.9vw, 1rem);
 }
 
 /* ---- Seat marks ---- */
 
-.seat-mark {
+.seat-mark-wrap {
     position: absolute;
-    font-size: 0.45rem;
+    display: flex;
+    align-items: center;
+    gap: 0.1rem;
+    z-index: 2;
+    white-space: nowrap;
+}
+
+.seat-mark {
+    font-size: clamp(0.7rem, 0.95vw, 1.1rem);
     color: var(--text-muted);
     background: var(--bg-card);
     border: 1px solid var(--border-color);
     border-radius: 3px;
-    padding: 0 0.2rem;
+    padding: 0.05rem 0.3rem;
     cursor: pointer;
     white-space: nowrap;
     line-height: 1.4;
-    z-index: 2;
     transition: all 0.15s;
 }
 
 .seat-mark:hover { border-color: var(--accent-gold); color: var(--text-primary); }
 .seat-mark.has-mark { background: rgba(0,0,0,0.5); }
+
+.seat-mark-clear {
+    font-size: clamp(0.55rem, 0.7vw, 0.8rem);
+    color: var(--text-muted);
+    cursor: pointer;
+    line-height: 1;
+    opacity: 0.5;
+    transition: all 0.15s;
+}
+.seat-mark-clear:hover { color: var(--accent-red); opacity: 1; }
 
 /* ---- Mark picker popup ---- */
 
@@ -491,11 +519,11 @@ label { display: block; color: var(--text-secondary); font-size: 0.78rem; margin
     background: var(--bg-card);
     border: 1px solid var(--border-color);
     border-radius: var(--radius);
-    padding: 0.4rem;
+    padding: 0.5rem;
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
-    max-width: 360px;
+    gap: 0.35rem;
+    max-width: 480px;
     box-shadow: 0 8px 32px rgba(0,0,0,0.6);
 }
 
@@ -503,28 +531,21 @@ label { display: block; color: var(--text-secondary); font-size: 0.78rem; margin
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 0.2rem;
-    padding-left: 3rem;
+    gap: 0.3rem;
+    padding-left: 3.8rem;
 }
 
 .mark-group-label {
-    font-size: 0.6rem;
+    font-size: 0.85rem;
     font-weight: bold;
-    width: 2.8rem;
+    width: 3.5rem;
     flex-shrink: 0;
-    margin-left: -3rem;
-}
-
-.mark-clear {
-    align-self: flex-start;
-    margin-bottom: 0.15rem;
-    color: var(--text-muted) !important;
-    border-color: var(--border-color) !important;
+    margin-left: -3.8rem;
 }
 
 .mark-opt {
-    padding: 0.18rem 0.4rem;
-    font-size: 0.62rem;
+    padding: 0.25rem 0.55rem;
+    font-size: 0.85rem;
     background: rgba(255,255,255,0.04);
     border: 1.5px solid var(--border-color);
     border-radius: 4px;
@@ -536,6 +557,23 @@ label { display: block; color: var(--text-secondary); font-size: 0.78rem; margin
 
 .mark-opt:hover { filter: brightness(1.4); background: rgba(255,255,255,0.1); }
 .mark-opt.active { background: rgba(255,255,255,0.15); font-weight: bold; box-shadow: 0 0 4px currentColor; }
+
+.mark-custom-input {
+    width: 6rem !important;
+    padding: 0.2rem 0.4rem !important;
+    font-size: 0.85rem !important;
+    background: var(--bg-input);
+    border: 1.5px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+}
+.mark-custom-input:focus { border-color: var(--accent-gold); }
+.mark-custom-confirm {
+    padding: 0.2rem 0.5rem;
+    color: var(--accent-green) !important;
+    border-color: var(--accent-green) !important;
+    font-weight: bold;
+}
 
 /* ---- In-game confirm dialog ---- */
 
@@ -581,8 +619,8 @@ label { display: block; color: var(--text-secondary); font-size: 0.78rem; margin
 .role-card .role-name { font-size: 1rem; font-weight: 700; margin-bottom: 0.1rem; }
 .role-card.good .role-name { color: var(--accent-blue); }
 .role-card.evil .role-name { color: var(--accent-red); }
-.role-card .role-team { font-size: 0.68rem; color: var(--text-secondary); margin-bottom: 0.15rem; }
-.role-card .role-ability { font-size: 0.72rem; color: var(--text-primary); line-height: 1.4; }
+.role-card .role-team { font-size: 0.78rem; color: var(--text-secondary); margin-bottom: 0.15rem; }
+.role-card .role-ability { font-size: 0.82rem; color: var(--text-primary); line-height: 1.4; }
 
 /* ---- Day action area ---- */
 
@@ -618,7 +656,7 @@ label { display: block; color: var(--text-secondary); font-size: 0.78rem; margin
     border: 1px solid var(--border-color);
     border-radius: var(--radius);
     color: var(--text-primary);
-    cursor: pointer; transition: all 0.15s; font-size: 0.75rem;
+    cursor: pointer; transition: all 0.15s; font-size: 0.85rem;
 }
 .action-panel .option-btn:hover, .day-action-area .option-btn:hover {
     border-color: var(--accent-gold); background: #1e1e3a;
@@ -636,7 +674,7 @@ label { display: block; color: var(--text-secondary); font-size: 0.78rem; margin
     padding: 0.35rem 0.5rem;
     margin-bottom: 0.3rem;
     animation: fadeIn 0.3s;
-    font-size: 0.75rem;
+    font-size: 0.85rem;
 }
 .info-panel.warning { border-left-color: var(--accent-gold); }
 .info-panel.danger { border-left-color: var(--accent-red); }
@@ -651,9 +689,9 @@ label { display: block; color: var(--text-secondary); font-size: 0.78rem; margin
 
 /* ---- Nomination table ---- */
 
-.nom-table { width: 100%; border-collapse: collapse; font-size: 0.68rem; margin-top: 0.3rem; }
+.nom-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; margin-top: 0.3rem; }
 .nom-table th, .nom-table td { padding: 0.2rem 0.25rem; text-align: left; border-bottom: 1px solid var(--border-color); }
-.nom-table th { color: var(--text-muted); font-weight: 600; font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.5px; }
+.nom-table th { color: var(--text-muted); font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.5px; }
 .nom-pass { color: var(--accent-red); font-weight: 700; }
 .nom-fail { color: var(--text-muted); }
 
@@ -668,7 +706,7 @@ label { display: block; color: var(--text-secondary); font-size: 0.78rem; margin
 
 .role-col h3 {
     color: var(--accent-gold);
-    font-size: 0.78rem;
+    font-size: 0.88rem;
     font-weight: 700;
     margin-bottom: 0.3rem;
     border-bottom: 1px solid var(--border-color);
@@ -682,7 +720,7 @@ label { display: block; color: var(--text-secondary); font-size: 0.78rem; margin
     background: var(--bg-secondary);
     border-radius: var(--radius);
     border: 1px solid var(--border-color);
-    font-size: 0.72rem;
+    font-size: 0.82rem;
     margin-bottom: 0.2rem;
 }
 
@@ -703,17 +741,17 @@ label { display: block; color: var(--text-secondary); font-size: 0.78rem; margin
 .help-tab {
     background: none; border: 1px solid var(--border-color); color: var(--text-muted);
     padding: 0.25rem 0.75rem; border-radius: var(--radius) var(--radius) 0 0;
-    cursor: pointer; font-size: 0.78rem; font-weight: 600; transition: all 0.2s;
+    cursor: pointer; font-size: 0.88rem; font-weight: 600; transition: all 0.2s;
 }
 .help-tab.active { background: var(--accent-gold); color: var(--bg-primary); border-color: var(--accent-gold); }
 .help-tab:hover:not(.active) { color: var(--text-primary); border-color: var(--text-muted); }
 
 /* ---- Distribution table ---- */
 
-.dist-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+.dist-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
 .dist-table th {
     text-align: center; padding: 0.35rem 0.3rem;
-    font-size: 0.68rem; font-weight: 600; text-transform: uppercase;
+    font-size: 0.78rem; font-weight: 600; text-transform: uppercase;
     letter-spacing: 0.5px; color: var(--text-muted);
     border-bottom: 2px solid var(--border-color);
 }
@@ -726,10 +764,10 @@ label { display: block; color: var(--text-secondary); font-size: 0.78rem; margin
 
 .review-teams { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
 .review-team { background: var(--bg-secondary); border-radius: var(--radius); padding: 0.5rem; border: 1px solid var(--border-color); }
-.review-player { display: flex; gap: 0.4rem; align-items: center; padding: 0.15rem 0; font-size: 0.75rem; }
+.review-player { display: flex; gap: 0.4rem; align-items: center; padding: 0.15rem 0; font-size: 0.85rem; }
 .review-player.dead { opacity: 0.5; text-decoration: line-through; }
 .review-events { background: var(--bg-secondary); border-radius: var(--radius); padding: 0.5rem; border: 1px solid var(--border-color); max-height: 200px; overflow-y: auto; }
-.review-event { padding: 0.15rem 0; font-size: 0.75rem; color: var(--text-secondary); border-bottom: 1px solid rgba(255,255,255,0.03); }
+.review-event { padding: 0.15rem 0; font-size: 0.85rem; color: var(--text-secondary); border-bottom: 1px solid rgba(255,255,255,0.03); }
 
 /* ---- Utility ---- */
 
@@ -769,15 +807,43 @@ label { display: block; color: var(--text-secondary); font-size: 0.78rem; margin
 /* ---- Responsive ---- */
 
 @media (max-width: 1024px) {
-    .game-layout { grid-template-columns: 180px 1fr 220px; }
+    .game-layout { grid-template-columns: clamp(170px, 18vw, 220px) 1fr clamp(200px, 22vw, 260px); }
     .town-square .seat { width: 56px; height: 56px; }
 }
 
 @media (max-width: 768px) {
-    .game-layout { grid-template-columns: 1fr; height: auto; }
-    .col-left, .col-center, .col-right { border: none; max-height: none; overflow: visible; }
-    html, body { overflow: auto; }
+    body:has(.game-layout) { overflow: auto; }
+    main:has(.game-layout) { height: auto; overflow: visible; }
+    .game-layout {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto;
+        height: auto;
+    }
+    .col-left {
+        order: 3;
+        border: none;
+        overflow: visible;
+    }
+    .col-center {
+        order: 1;
+        border: none;
+        overflow: visible;
+    }
+    .col-right {
+        order: 2;
+        border: none;
+        max-height: none;
+        overflow: visible;
+    }
+    .col-left .log-card, .col-left .chat-card { flex: none !important; }
+    .town-card { min-height: 280px; }
     .town-square { max-width: 320px; }
-    .town-square .seat { width: 48px; height: 48px; font-size: 0.5rem; }
+    .town-square .seat { width: 56px; height: 56px; font-size: 0.6rem; }
+    .town-square .seat .seat-number { font-size: 1.1rem; }
+    .town-square .seat .seat-name { font-size: 0.6rem; max-width: 48px; }
+    .notebook { height: 80px; }
+    .game-log { height: 180px; max-height: none; }
+    .chat-box { height: 120px; max-height: none; }
+    .night-info-scroll { max-height: 100px; }
     .role-modal-grid { grid-template-columns: 1fr; }
 }

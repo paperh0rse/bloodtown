@@ -124,6 +124,13 @@ async def ws_endpoint(ws: WebSocket, room_code: str):
 
             # --- Join ---
             if msg_type == "join":
+                if game.phase.value != "lobby":
+                    await ws.send_text(json.dumps({
+                        "type": "join_rejected",
+                        "data": {"message": "游戏已开始，无法加入。"},
+                    }, ensure_ascii=False))
+                    continue
+
                 name = data.get("name", "匿名")
                 player_id = data.get("player_id") or str(uuid.uuid4())[:8]
                 game.add_player(player_id, name)
@@ -147,11 +154,17 @@ async def ws_endpoint(ws: WebSocket, room_code: str):
                     await manager.send_personal(room_code, player_id, "game_state", game.public_state())
                     if game.phase.value not in ("lobby",):
                         await manager.send_personal(room_code, player_id, "private_state", game.private_state(player_id))
+                        for ni in game.get_player_night_info(player_id):
+                            await manager.send_personal(room_code, player_id, "night_info", ni)
                 else:
                     player_id = ""
+                    in_progress = game.phase.value != "lobby"
                     await ws.send_text(json.dumps({
                         "type": "reconnect_failed",
-                        "data": {"message": "该房间中没有你的记录，请重新加入。"},
+                        "data": {
+                            "message": "游戏已开始，无法重新加入。" if in_progress else "该房间中没有你的记录，请重新加入。",
+                            "game_started": in_progress,
+                        },
                     }, ensure_ascii=False))
 
             # --- Add bots ---
@@ -202,6 +215,8 @@ async def ws_endpoint(ws: WebSocket, room_code: str):
                         "type": "error", "data": {"message": "只有房主可以开始游戏。"},
                     }, ensure_ascii=False))
                     continue
+                if game.phase != GamePhase.LOBBY:
+                    continue
                 if game.player_count() < 5:
                     await ws.send_text(json.dumps({
                         "type": "error", "data": {"message": "至少需要5名玩家。"},
@@ -213,6 +228,13 @@ async def ws_endpoint(ws: WebSocket, room_code: str):
                     }, ensure_ascii=False))
                     continue
                 await game.start_game()
+
+            # --- Request private state (client missed role_assigned) ---
+            elif msg_type == "request_private_state":
+                if player_id and player_id in game.players and game.phase.value != "lobby":
+                    await manager.send_personal(
+                        room_code, player_id, "private_state", game.private_state(player_id)
+                    )
 
             # --- Night action response ---
             elif msg_type == "action_response":
@@ -246,7 +268,7 @@ async def ws_endpoint(ws: WebSocket, room_code: str):
                 agree = data.get("agree", False)
                 await game.handle_vote_end_nominations(player_id, agree)
 
-            # --- Restart game ---
+            # --- Restart game (host, game over) ---
             elif msg_type == "restart_game":
                 if player_id != game.host_id:
                     await ws.send_text(json.dumps({
@@ -256,6 +278,15 @@ async def ws_endpoint(ws: WebSocket, room_code: str):
                 if game.phase != GamePhase.GAME_OVER:
                     continue
                 await game.restart_game()
+
+            # --- Propose restart vote (any player, during game) ---
+            elif msg_type == "propose_restart":
+                await game.handle_propose_restart(player_id)
+
+            # --- Vote on restart ---
+            elif msg_type == "vote_restart":
+                agree = data.get("agree", False)
+                await game.handle_vote_restart(player_id, agree)
 
             # --- Chat (relay to all) ---
             elif msg_type == "chat":

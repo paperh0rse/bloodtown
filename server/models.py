@@ -70,6 +70,7 @@ class PlayerState(BaseModel):
     seat: int = 0
     is_bot: bool = False
     role_id: str = ""
+    original_role_id: str = ""  # preserved for post-game reveal (survives starpass)
     # For the Drunk: what the player *thinks* they are
     apparent_role_id: str = ""
     alive: bool = True
@@ -113,7 +114,7 @@ PLAYER_DISTRIBUTION: dict[int, tuple[int, int, int, int]] = {
     # (townsfolk, outsiders, minions, demons)
     5:  (3, 0, 1, 1),
     6:  (3, 1, 1, 1),
-    7:  (5, 0, 1, 1),
+    7:  (4, 1, 1, 1),
     8:  (5, 1, 1, 1),
     9:  (5, 2, 1, 1),
     10: (7, 0, 2, 1),

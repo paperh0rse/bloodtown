@@ -8,14 +8,15 @@ from server.models import DaySubPhase, GamePhase
 from tests.conftest import make_game, kill
 
 
-def setup_voting(game, nominator_id="a", nominee_id="b"):
-    """Put game into VOTING state with initial nominator auto-yes."""
+def setup_voting(game):
+    """Put game into VOTING state with empty votes."""
     game.phase = GamePhase.DAY
     game.day_sub = DaySubPhase.VOTING
     game._vote_eligible_count = sum(
         1 for p in game.players.values() if p.alive or p.has_vote_token
     )
-    game._votes = {nominator_id: True}
+    game._votes = {}
+    game._butler_blocked = set()
 
 
 # ======================================================================
@@ -116,25 +117,34 @@ class TestDeadVoting:
 
 class TestButlerVoting:
 
-    async def test_butler_cant_vote_yes_before_master(self, mock_manager):
+    async def test_butler_blocked_while_waiting(self, mock_manager):
+        """Butler in _butler_blocked set cannot vote."""
         game = make_game({"a": "washerwoman", "b": "butler", "c": "imp", "d": "empath", "e": "poisoner"})
         game.players["b"].butler_master_id = "c"
         setup_voting(game)
+        game._butler_blocked = {"b"}
 
         await game.handle_vote("b", True)
-
         assert "b" not in game._votes
-        errors = [m for m in mock_manager.messages if m[2] == "error"]
-        assert len(errors) == 1
 
-    async def test_butler_can_vote_yes_after_master(self, mock_manager):
+    async def test_butler_yes_rejected_when_master_no(self, mock_manager):
+        """Butler votes yes after master voted no → rejected."""
         game = make_game({"a": "washerwoman", "b": "butler", "c": "imp", "d": "empath", "e": "poisoner"})
         game.players["b"].butler_master_id = "c"
         setup_voting(game)
 
-        await game.handle_vote("c", True)  # master votes yes first
-        await game.handle_vote("b", True)
+        await game.handle_vote("c", False)  # master votes no
+        await game.handle_vote("b", True)   # butler tries yes
+        assert "b" not in game._votes       # rejected
 
+    async def test_butler_yes_allowed_when_master_yes(self, mock_manager):
+        """Butler votes yes after master voted yes → allowed."""
+        game = make_game({"a": "washerwoman", "b": "butler", "c": "imp", "d": "empath", "e": "poisoner"})
+        game.players["b"].butler_master_id = "c"
+        setup_voting(game)
+
+        await game.handle_vote("c", True)  # master votes yes
+        await game.handle_vote("b", True)  # butler votes yes
         assert game._votes["b"] is True
 
     async def test_butler_can_vote_no_anytime(self, mock_manager):
@@ -143,46 +153,19 @@ class TestButlerVoting:
         setup_voting(game)
 
         await game.handle_vote("b", False)
-
         assert game._votes["b"] is False
 
-    async def test_butler_blocked_when_master_votes_no(self, mock_manager):
+    async def test_butler_unlock_sends_message(self, mock_manager):
+        """When master votes, butler is unblocked and notified."""
         game = make_game({"a": "washerwoman", "b": "butler", "c": "imp", "d": "empath", "e": "poisoner"})
         game.players["b"].butler_master_id = "c"
         setup_voting(game)
+        game._butler_blocked = {"b"}
 
-        await game.handle_vote("c", False)  # master votes no
-        await game.handle_vote("b", True)   # butler tries yes
-
-        assert "b" not in game._votes
-
-    async def test_butler_nominator_auto_yes_voided_if_master_no(self, mock_manager):
-        """Butler as nominator: auto-yes is voided at tally if master didn't vote yes."""
-        game = make_game({"a": "butler", "b": "washerwoman", "c": "imp", "d": "empath", "e": "poisoner"})
-        game.players["a"].butler_master_id = "b"
-        game.phase = GamePhase.DAY
-        game.day_sub = DaySubPhase.VOTING
-
-        # Simulate: butler (a) is nominator, auto-yes is in _votes
-        game._votes = {"a": True}
-        game._vote_eligible_count = 5
-
-        # Others vote
-        await game.handle_vote("b", False)  # master votes no
-        await game.handle_vote("c", True)
-        await game.handle_vote("d", True)
-        await game.handle_vote("e", True)
-
-        # Simulate the butler tally check from _process_nomination
-        nominator = game.players["a"]
-        if nominator.role_id == "butler" and nominator.butler_master_id:
-            master_voted = game._votes.get(nominator.butler_master_id)
-            if not master_voted:
-                game._votes["a"] = False
-
-        yes_votes = sum(1 for v in game._votes.values() if v)
-        assert yes_votes == 3  # c, d, e — butler's vote voided
-        assert game._votes["a"] is False
+        await game.handle_vote("c", True)  # master votes
+        assert "b" not in game._butler_blocked
+        unlocked = [m for m in mock_manager.messages if m[2] == "butler_unlocked"]
+        assert len(unlocked) >= 1
 
 
 # ======================================================================
@@ -208,3 +191,84 @@ class TestVoteTally:
         game = make_game({"a": "imp", "b": "poisoner", "c": "washerwoman"})
         needed = (game.alive_count() + 1) // 2
         assert needed == 2
+
+
+# ======================================================================
+# Restart vote
+# ======================================================================
+
+class TestRestartVote:
+
+    async def test_propose_restart_sets_state(self, mock_manager):
+        game = make_game({"a": "imp", "b": "poisoner", "c": "washerwoman", "d": "chef", "e": "empath"})
+        game.phase = GamePhase.DAY
+
+        await game.handle_propose_restart("c")
+
+        assert game._restart_proposer == "c"
+        assert game._restart_votes["c"] is True
+        state = game.public_state()
+        assert state["restart_vote"] is not None
+        assert state["restart_vote"]["proposer_id"] == "c"
+
+    async def test_propose_restart_ignored_in_lobby(self, mock_manager):
+        game = make_game({"a": "imp", "b": "poisoner", "c": "washerwoman"})
+        game.phase = GamePhase.LOBBY
+
+        await game.handle_propose_restart("c")
+
+        assert game._restart_proposer == ""
+
+    async def test_all_agree_triggers_restart(self, mock_manager):
+        game = make_game({"a": "imp", "b": "poisoner", "c": "washerwoman"})
+        game.phase = GamePhase.DAY
+
+        await game.handle_propose_restart("a")
+        await game.handle_vote_restart("b", True)
+        await game.handle_vote_restart("c", True)
+
+        assert game.phase == GamePhase.LOBBY
+        restarted = [b for b in mock_manager.broadcasts if b[1] == "game_restarted"]
+        assert len(restarted) == 1
+
+    async def test_one_reject_cancels(self, mock_manager):
+        game = make_game({"a": "imp", "b": "poisoner", "c": "washerwoman", "d": "chef"})
+        game.phase = GamePhase.DAY
+
+        await game.handle_propose_restart("a")
+        await game.handle_vote_restart("b", False)
+
+        assert game._restart_proposer == ""
+        assert game._restart_votes == {}
+        rejected = [b for b in mock_manager.broadcasts if b[1] == "restart_rejected"]
+        assert len(rejected) == 1
+
+    async def test_duplicate_propose_blocked(self, mock_manager):
+        game = make_game({"a": "imp", "b": "poisoner", "c": "washerwoman"})
+        game.phase = GamePhase.DAY
+
+        await game.handle_propose_restart("a")
+        await game.handle_propose_restart("b")
+
+        errors = [m for m in mock_manager.messages if m[2] == "error"]
+        assert len(errors) == 1
+        assert game._restart_proposer == "a"
+
+    async def test_bots_auto_agree(self, mock_manager):
+        game = make_game({"a": "imp", "b": "poisoner", "c": "washerwoman"})
+        game.players["b"].is_bot = True
+        game.phase = GamePhase.DAY
+
+        await game.handle_propose_restart("a")
+
+        assert game._restart_votes.get("b") is True
+
+    async def test_duplicate_vote_ignored(self, mock_manager):
+        game = make_game({"a": "imp", "b": "poisoner", "c": "washerwoman", "d": "chef"})
+        game.phase = GamePhase.DAY
+
+        await game.handle_propose_restart("a")
+        await game.handle_vote_restart("b", True)
+        await game.handle_vote_restart("b", False)  # should be ignored
+
+        assert game._restart_votes["b"] is True
