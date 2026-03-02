@@ -199,14 +199,15 @@ class Game:
             p.butler_master_id = ""
             p.fortune_teller_red_herring = ""
 
-        # Handle Drunk: thinks they are a random townsfolk not in play
+        # Handle Drunk: 酒鬼以为自己是「未在场的村民」之一，不能是外来者（如管家）
         for pid in self.seat_order:
             p = self.players[pid]
             if p.role_id == "drunk":
                 p.drunk = True
-                available = [r for r in good_not_in_play if r not in [b for b in self.demon_bluffs]]
+                townsfolk_not_in_play = [r.id for r in townsfolk_pool if r.id not in in_play_ids]
+                available = [r for r in townsfolk_not_in_play if r not in self.demon_bluffs]
                 if not available:
-                    available = [r.id for r in townsfolk_pool if r.id not in in_play_ids]
+                    available = townsfolk_not_in_play
                 if available:
                     p.apparent_role_id = random.choice(available)
                 else:
@@ -396,7 +397,9 @@ class Game:
     async def _run_night(self) -> None:
         self.phase = GamePhase.NIGHT
         self._night_deaths = []
-        self._add_log("phase", f"第 {self.day_number} 个夜晚降临了...")
+        # 第一个白天投票后的夜晚是第2晚，day_number 此时为 1
+        night_label = self.day_number + 1
+        self._add_log("phase", f"第 {night_label} 个夜晚降临了...")
         await manager.broadcast(self.room_code, "game_state", self.public_state())
         await asyncio.sleep(1)
 
@@ -491,8 +494,7 @@ class Game:
             [{"id": t.player_id, "name": f"{t.seat+1}号 {t.name}"} for t in targets],
         )
         if target_id and target_id in self.players:
-            if not (p.poisoned or p.drunk):
-                self.players[target_id].protected = True
+            self.players[target_id].protected = True
 
     async def _action_imp(self, pid: str) -> None:
         p = self.players[pid]
@@ -509,7 +511,7 @@ class Game:
 
         target = self.players[target_id]
 
-        # Imp kills self -> minion becomes Imp
+        # 恶魔自刀传刀：立即结算，不等待；后续夜晚流程继续（掘墓/管家等）由 acting_players 顺序执行
         if target_id == pid:
             self._night_deaths.append(pid)
             alive_minions = [
@@ -768,11 +770,12 @@ class Game:
         if not executed:
             return
 
+        # 官方规则：掘墓人得知的是被处决者的真实角色（如酒鬼则显示酒鬼，非其假身份）
         is_drunk_or_poisoned = p.poisoned or p.drunk
         if is_drunk_or_poisoned:
             shown_role = random.choice(list(ROLE_BY_ID.keys()))
         else:
-            shown_role = executed.role_id
+            shown_role = executed.role_id  # 真实身份，酒鬼即显示酒鬼
             shown_role = self._apply_spy_recluse_registration(executed, shown_role)
 
         role_def = ROLE_BY_ID.get(shown_role)
@@ -1636,7 +1639,7 @@ class Game:
             p = self.players[pid]
             show_role = p.original_role_id or p.role_id
             rd = ROLE_BY_ID.get(show_role)
-            reveal.append({
+            entry = {
                 "id": pid,
                 "name": p.name,
                 "seat": p.seat + 1,
@@ -1644,7 +1647,14 @@ class Game:
                 "role_name": rd.name_zh if rd else "???",
                 "alignment": p.alignment.value,
                 "alive": p.alive,
-            })
+            }
+            # 占卜师（或酒鬼假身份占卜师）的占卜天敌，结算时展示在身份后
+            if (p.role_id == "fortune_teller" or (p.drunk and p.apparent_role_id == "fortune_teller")) and p.fortune_teller_red_herring:
+                rh = self.players.get(p.fortune_teller_red_herring)
+                if rh:
+                    entry["fortune_red_herring_seat"] = rh.seat + 1
+                    entry["fortune_red_herring_name"] = rh.name
+            reveal.append(entry)
 
         key_types = {"phase", "death", "execution", "ability", "game_over"}
         log_summary = [

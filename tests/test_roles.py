@@ -7,7 +7,9 @@ from unittest.mock import patch
 
 import pytest
 
-from server.models import Alignment, GamePhase
+from server.models import Alignment, GamePhase, PlayerState
+from server.role_data import get_roles_by_team
+from server.models import Team
 from tests.conftest import make_game, kill, poison, protect
 
 
@@ -412,3 +414,80 @@ class TestButler:
             await game._action_butler("a")
 
         assert game.players["a"].butler_master_id == "b"
+
+
+# ======================================================================
+# Drunk (apparent role townsfolk only)
+# ======================================================================
+
+class TestDrunkApparentRole:
+
+    def test_drunk_apparent_role_is_townsfolk_only(self):
+        """酒鬼假身份只从村民池抽取，不会随机到管家等外来者。"""
+        townsfolk_ids = {r.id for r in get_roles_by_team(Team.TOWNSFOLK)}
+        for seed in range(200):
+            random.seed(seed)
+            game = _make_game_for_assign_roles(5)
+            game.assign_roles()
+            for p in game.players.values():
+                if p.role_id == "drunk":
+                    assert p.apparent_role_id in townsfolk_ids, (
+                        f"seed={seed}: drunk apparent_role_id={p.apparent_role_id} must be townsfolk"
+                    )
+
+
+def _make_game_for_assign_roles(n: int):
+    """Build a minimal Game with n players for testing assign_roles()."""
+    from server.game_engine import Game
+    game = Game("TEST")
+    for i in range(n):
+        pid = f"p{i+1}"
+        game.seat_order.append(pid)
+        game.players[pid] = PlayerState(player_id=pid, name=f"P{i+1}", seat=i)
+    game.host_id = game.seat_order[0]
+    return game
+
+
+# ======================================================================
+# Undertaker (sees executed true role: drunk as 酒鬼)
+# ======================================================================
+
+class TestUndertaker:
+
+    async def test_undertaker_sees_executed_drunk_as_drunk(self, mock_manager):
+        """掘墓人验证被处决的玩家时，酒鬼显示为酒鬼（真实身份）。"""
+        game = make_game({"a": "undertaker", "b": "drunk", "c": "imp", "d": "chef", "e": "empath"})
+        game.players["b"].drunk = True
+        game.players["b"].apparent_role_id = "fortune_teller"
+        game.phase = GamePhase.NIGHT
+        game._executed_today = "b"
+
+        await game._action_undertaker("a")
+
+        msgs = [m for m in mock_manager.messages if m[2] == "night_info" and m[1] == "a"]
+        assert len(msgs) == 1
+        assert msgs[0][3].get("role_id") == "drunk"
+        assert "酒鬼" in msgs[0][3].get("role_name", "") or "酒鬼" in msgs[0][3].get("message", "")
+
+
+# ======================================================================
+# Game over reveal (fortune teller red herring)
+# ======================================================================
+
+class TestGameOverReveal:
+
+    async def test_game_over_reveal_includes_fortune_red_herring(self, mock_manager):
+        """结算时占卜师身份后展示占卜天敌信息。"""
+        game = make_game({"a": "fortune_teller", "b": "chef", "c": "imp", "d": "empath", "e": "poisoner"})
+        game.players["a"].fortune_teller_red_herring = "b"
+        game.players["b"].seat = 1
+
+        await game._end_game("good", "好人获胜")
+
+        go = [x for x in mock_manager.broadcasts if x[1] == "game_over"]
+        assert len(go) == 1
+        players = go[0][2].get("players", [])
+        a_entry = next((p for p in players if p["id"] == "a"), None)
+        assert a_entry is not None
+        assert a_entry.get("fortune_red_herring_seat") == 2
+        assert a_entry.get("fortune_red_herring_name") == "P2"

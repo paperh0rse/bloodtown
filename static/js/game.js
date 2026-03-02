@@ -277,7 +277,7 @@
             case 'lobby': text = '等待玩家加入...'; break;
             case 'setup': text = '游戏准备中...'; cls = 'night'; break;
             case 'first_night': text = '第一个夜晚'; cls = 'night'; break;
-            case 'night': text = `第 ${dayNum} 个夜晚`; cls = 'night'; break;
+            case 'night': text = `第 ${dayNum + 1} 个夜晚`; cls = 'night'; break;
             case 'day': text = `第 ${dayNum} 天`; cls = 'day'; break;
             case 'game_over': text = '游戏结束'; cls = 'gameover'; break;
             default: text = phase;
@@ -687,10 +687,11 @@
     function enterNominationMode() {
         if (!gameState) return;
         selectMode = 'nominate';
-        const alive = gameState.players.filter(p => p.alive && p.id !== playerId);
+        const nominatedToday = new Set(gameState.nominated_today || []);
+        const alive = gameState.players.filter(p => p.alive && p.id !== playerId && !nominatedToday.has(p.id));
         selectablePlayerIds = alive.map(p => p.id);
         renderTownSquare();
-        setBroadcast('点击圆桌头像选择提名目标');
+        setBroadcast('点击圆桌头像选择提名目标（已被提名过的玩家不可选）');
     }
 
     function enterSlayerMode() {
@@ -911,6 +912,7 @@
                                 <div class="review-player ${p.alive ? '' : 'dead'}">
                                     ${ptag(p.seat || '?', p.name)}
                                     <span style="color:var(--accent-blue)">${esc(p.role_name)}</span>
+                                    ${p.fortune_red_herring_seat != null ? `<span style="color:var(--text-muted);font-size:0.85em;">（占卜天敌：${p.fortune_red_herring_seat}号 ${esc(p.fortune_red_herring_name || '')}）</span>` : ''}
                                 </div>
                             `).join('')}
                         </div>

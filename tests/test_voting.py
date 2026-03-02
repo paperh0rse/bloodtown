@@ -72,6 +72,29 @@ class TestBasicVoting:
 
 
 # ======================================================================
+# Nomination (each player can be nominated at most once per day)
+# ======================================================================
+
+class TestNominationOncePerPlayer:
+
+    async def test_nominate_rejects_already_nominated_player(self, mock_manager):
+        """每轮同一玩家只能被提名一次；已被提名过的玩家再次被提名时返回错误。"""
+        game = make_game({"a": "washerwoman", "b": "chef", "c": "imp", "d": "empath", "e": "poisoner"})
+        game.phase = GamePhase.DAY
+        game.day_sub = DaySubPhase.NOMINATION
+        game._nominated_today = {"b"}
+        game._nominations_remaining = 5
+
+        await game.handle_nominate("a", "b")
+
+        errors = [m for m in mock_manager.messages if m[2] == "error" and m[1] == "a"]
+        assert len(errors) == 1
+        assert "已被提名过" in errors[0][3].get("message", "")
+        assert "a" not in game._nominators_today
+        assert "b" in game._nominated_today
+
+
+# ======================================================================
 # Dead player voting
 # ======================================================================
 
