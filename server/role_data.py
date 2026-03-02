@@ -129,14 +129,16 @@ TROUBLE_BREWING: list[RoleDef] = [
     RoleDef(
         id="scarlet_woman", name_en="Scarlet Woman", name_zh="猩红女郎",
         team=Team.MINION,
-        ability_zh="如果存活玩家≥5且恶魔死亡，你变成恶魔。",
+        ability_zh="如果存活玩家≥5且恶魔死亡，你变成恶魔。（至少7人局可用。）",
         other_night_order=15,
+        min_players=7,
     ),
     RoleDef(
         id="baron", name_en="Baron", name_zh="男爵",
         team=Team.MINION,
-        ability_zh="游戏中额外增加2个外来者角色（替换2个村民）。",
+        ability_zh="游戏中额外增加2个外来者角色（替换2个村民）。（至少6人局可用。）",
         setup_modifies=True,
+        min_players=6,
     ),
     # ---- Demon ----
     RoleDef(

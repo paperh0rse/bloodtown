@@ -153,14 +153,10 @@ class Game:
 
         chosen_demons = random.sample(demon_pool, dem_count)
 
-        # Exclude Baron if +2 outsiders would leave fewer than 2 townsfolk
-        effective_minion_pool = minion_pool
-        baron_tf = n - min(out_count + 2, len(outsider_pool)) - min_count - dem_count
-        if baron_tf < 2:
-            effective_minion_pool = [r for r in minion_pool if r.id != "baron"]
-            if len(effective_minion_pool) < min_count:
-                effective_minion_pool = minion_pool
-        chosen_minions = random.sample(effective_minion_pool, min_count)
+        eligible_minions = [r for r in minion_pool if r.min_players <= n]
+        if len(eligible_minions) < min_count:
+            eligible_minions = minion_pool
+        chosen_minions = random.sample(eligible_minions, min_count)
 
         # Baron modifies distribution
         has_baron = any(r.id == "baron" for r in chosen_minions)

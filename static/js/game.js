@@ -101,7 +101,12 @@
             localStorage.setItem(roomKey(), playerId);
         });
 
-        ws.on('reconnected', () => showToast('已重新连接', 'info'));
+        ws.on('reconnected', () => {
+            showToast('已重新连接', 'info');
+            nightInfoLog = [];
+            const ni = $('#night-info-container');
+            if (ni) ni.innerHTML = '';
+        });
 
         ws.on('reconnect_failed', (data) => {
             playerId = '';
@@ -184,6 +189,7 @@
             addLogHTML(`${ptag(data.nominee_seat, data.nominee_name)}: ${data.yes_votes}票赞成 (需要${data.needed}票)`, 'vote');
             setBroadcast(`[${data.nominee_seat}]${data.nominee_name}: ${data.yes_votes}/${data.needed}票`);
             hideActionPanel();
+            const vo = $('#voting-overlay'); if (vo) vo.remove();
         });
 
         ws.on('virgin_trigger', (data) => { addLogHTML(fmtLog(data.message), 'ability'); setBroadcast(data.message); });
@@ -223,7 +229,10 @@
 
         ws.on('chat', (data) => addChatMessage(data.sender_name, data.text));
         ws.on('end_nom_proposal', (data) => { showToast(data.message, 'info'); setBroadcast(data.message); });
-        ws.on('end_nom_rejected', (data) => { addLogHTML(fmtLog(data.message), 'event'); showToast(data.message, 'warning'); });
+        ws.on('end_nom_rejected', (data) => {
+            addLogHTML(fmtLog(data.message), 'event'); showToast(data.message, 'warning');
+            const eno = $('#end-nom-overlay'); if (eno) eno.remove();
+        });
 
         ws.on('restart_proposal', (data) => {
             setBroadcast(data.message);
@@ -245,10 +254,16 @@
 
     // ---- Broadcast bar ----
 
+    let _prevBroadcast = '';
+    let _currentBroadcast = '';
+
     function setBroadcast(msg) {
         const bar = $('#broadcast-bar');
         if (!bar || !msg) return;
-        bar.innerHTML = fmtLog(msg);
+        _prevBroadcast = _currentBroadcast;
+        _currentBroadcast = msg;
+        bar.innerHTML = `<div class="broadcast-prev">${_prevBroadcast ? fmtLog(_prevBroadcast) : '&nbsp;'}</div>`
+            + `<div class="broadcast-current">${fmtLog(msg)}</div>`;
         bar.classList.remove('flash');
         void bar.offsetWidth;
         bar.classList.add('flash');
@@ -756,9 +771,6 @@
     }
 
     function renderVoting(data, disableYes) {
-        const panel = $('#action-panel');
-        if (!panel) return;
-
         const me = gameState && gameState.players.find(p => p.id === playerId);
         if (!me) return;
         const isDead = !me.alive;
@@ -768,66 +780,91 @@
         const yesDisabled = disableYes ? 'disabled' : '';
         const yesHint = disableYes ? '<div style="font-size:0.78rem;color:var(--text-muted);margin-top:0.2rem;">主人未投赞成，你无法赞成</div>' : '';
 
-        panel.classList.remove('hidden');
-        panel.innerHTML = `
-            <div style="margin-bottom:0.3rem;font-size:0.82rem;color:var(--text-secondary);">
-                ${ptag(data.nominator_seat, data.nominator_name)} 提名了 ${ptag(data.nominee_seat, data.nominee_name)}
+        let existing = $('#voting-overlay');
+        if (existing) existing.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'voting-overlay';
+        overlay.className = 'ingame-confirm-overlay';
+        overlay.innerHTML = `
+            <div class="ingame-confirm-box" style="min-width:280px;">
+                <div style="margin-bottom:0.4rem;font-size:0.88rem;color:var(--text-secondary);">
+                    ${ptag(data.nominator_seat, data.nominator_name)} 提名了 ${ptag(data.nominee_seat, data.nominee_name)}
+                </div>
+                <div style="font-size:1.05rem;font-weight:700;margin-bottom:0.6rem;color:var(--text-primary);">
+                    是否处决 ${ptag(data.nominee_seat, data.nominee_name)}？
+                </div>
+                <div class="ingame-confirm-btns">
+                    <button class="btn btn-success" id="btn-vote-yes" ${yesDisabled}>赞成处决</button>
+                    <button class="btn btn-secondary" id="btn-vote-no">${noLabel}</button>
+                </div>
+                ${yesHint}
             </div>
-            <h3>是否处决 ${ptag(data.nominee_seat, data.nominee_name)}？</h3>
-            <div class="vote-section">
-                <button class="btn btn-success btn-sm" id="btn-vote-yes" ${yesDisabled}>赞成处决</button>
-                <button class="btn btn-secondary btn-sm" id="btn-vote-no">${noLabel}</button>
-            </div>
-            ${yesHint}
         `;
-        $('#btn-vote-yes').addEventListener('click', () => {
+        document.body.appendChild(overlay);
+        overlay.querySelector('#btn-vote-yes').addEventListener('click', () => {
             ws.send('vote', { vote: true });
             showToast('已投赞成票', 'info');
-            hideActionPanel();
+            overlay.remove();
         });
-        $('#btn-vote-no').addEventListener('click', () => {
+        overlay.querySelector('#btn-vote-no').addEventListener('click', () => {
             ws.send('vote', { vote: false });
             showToast(isDead ? '已弃权' : '已投反对票', 'info');
-            hideActionPanel();
+            overlay.remove();
         });
     }
 
     function renderEndNomVoteStatus(parent, endVote) {
+        const agreedCount = Object.values(endVote.votes).filter(v => v).length;
+
         const statusDiv = document.createElement('div');
         statusDiv.className = 'info-panel';
         statusDiv.style.marginBottom = '0.3rem';
-
-        const agreedCount = Object.values(endVote.votes).filter(v => v).length;
         statusDiv.innerHTML = `
-            <div style="margin-bottom:0.3rem;font-size:0.82rem;">
+            <div style="font-size:0.82rem;">
                 ${ptag(endVote.proposer_seat, endVote.proposer_name)} 提议结束提名
                 <span style="color:var(--text-muted);font-size:0.78rem;">(${agreedCount}/${endVote.needed} 同意)</span>
             </div>
         `;
+        parent.appendChild(statusDiv);
 
         const me = gameState.players.find(p => p.id === playerId);
         const myVote = endVote.votes[playerId];
+
+        let existing = $('#end-nom-overlay');
+        if (existing) existing.remove();
+
         if (me && me.alive && myVote === undefined) {
-            const btnRow = document.createElement('div');
-            btnRow.style.cssText = 'display:flex;gap:0.3rem;';
-            const agreeBtn = document.createElement('button');
-            agreeBtn.className = 'btn btn-success btn-sm';
-            agreeBtn.style.flex = '1';
-            agreeBtn.textContent = '同意';
-            agreeBtn.addEventListener('click', () => ws.send('vote_end_nominations', { agree: true }));
-            btnRow.appendChild(agreeBtn);
-            const rejectBtn = document.createElement('button');
-            rejectBtn.className = 'btn btn-danger btn-sm';
-            rejectBtn.style.flex = '1';
-            rejectBtn.textContent = '拒绝';
-            rejectBtn.addEventListener('click', () => ws.send('vote_end_nominations', { agree: false }));
-            btnRow.appendChild(rejectBtn);
-            statusDiv.appendChild(btnRow);
+            const overlay = document.createElement('div');
+            overlay.id = 'end-nom-overlay';
+            overlay.className = 'ingame-confirm-overlay';
+            overlay.innerHTML = `
+                <div class="ingame-confirm-box" style="min-width:260px;">
+                    <div style="margin-bottom:0.4rem;font-size:0.88rem;color:var(--text-secondary);">
+                        ${ptag(endVote.proposer_seat, endVote.proposer_name)} 提议结束提名
+                    </div>
+                    <div style="font-size:0.95rem;font-weight:600;margin-bottom:0.6rem;color:var(--text-primary);">
+                        是否同意结束提名？
+                        <div style="font-size:0.78rem;color:var(--text-muted);font-weight:400;margin-top:0.2rem;">(${agreedCount}/${endVote.needed} 同意)</div>
+                    </div>
+                    <div class="ingame-confirm-btns">
+                        <button class="btn btn-success" id="eno-yes">同意</button>
+                        <button class="btn btn-danger" id="eno-no">拒绝</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+            overlay.querySelector('#eno-yes').addEventListener('click', () => {
+                ws.send('vote_end_nominations', { agree: true });
+                overlay.remove();
+            });
+            overlay.querySelector('#eno-no').addEventListener('click', () => {
+                ws.send('vote_end_nominations', { agree: false });
+                overlay.remove();
+            });
         } else if (myVote === true) {
             statusDiv.innerHTML += '<div style="color:var(--accent-green);font-size:0.82rem;">你已同意</div>';
         }
-
-        parent.appendChild(statusDiv);
     }
 
     function renderHostControls() {
@@ -1047,7 +1084,7 @@
     const PLAYER_DIST = {
         5:  [3, 0, 1, 1],
         6:  [3, 1, 1, 1],
-        7:  [4, 1, 1, 1],
+        7:  [5, 0, 1, 1],
         8:  [5, 1, 1, 1],
         9:  [5, 2, 1, 1],
         10: [7, 0, 2, 1],

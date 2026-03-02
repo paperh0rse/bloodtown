@@ -58,6 +58,7 @@ class RoleDef(BaseModel):
     first_night_order: int = 0   # 0 = does not act
     other_night_order: int = 0
     setup_modifies: bool = False  # e.g. Baron, Drunk
+    min_players: int = 0         # 0 = no restriction
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +115,7 @@ PLAYER_DISTRIBUTION: dict[int, tuple[int, int, int, int]] = {
     # (townsfolk, outsiders, minions, demons)
     5:  (3, 0, 1, 1),
     6:  (3, 1, 1, 1),
-    7:  (4, 1, 1, 1),
+    7:  (5, 0, 1, 1),
     8:  (5, 1, 1, 1),
     9:  (5, 2, 1, 1),
     10: (7, 0, 2, 1),
