@@ -129,7 +129,9 @@
             gameState = data;
             isHost = data.host_id === playerId;
 
-            if (prevPhase && prevPhase !== data.phase) {
+            const enteringNight = prevPhase && prevPhase !== data.phase
+                && (data.phase === 'night' || data.phase === 'first_night' || data.phase === 'lobby');
+            if (enteringNight) {
                 nightInfoLog = [];
                 const ni = $('#night-info-container');
                 if (ni) ni.innerHTML = '';
