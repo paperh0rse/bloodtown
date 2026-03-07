@@ -35,6 +35,7 @@ class Game:
 
         # Night state
         self._pending_action: asyncio.Event | None = None
+        self._pending_action_player: str = ""
         self._action_response: dict[str, Any] = {}
         self._signal_events: dict[str, asyncio.Event] = {}
         self._night_deaths: list[str] = []  # player_ids killed tonight
@@ -521,8 +522,10 @@ class Game:
         if not target_id or target_id not in self.players:
             return
 
-        # 恶魔自刀传刀：立即结算，不走常规死亡流程
+        # 恶魔自刀传刀：僧侣保护可阻止
         if target_id == pid:
+            if p.protected:
+                return
             self._night_deaths.append(pid)
             p.alive = False
             alive_minions = [
@@ -583,9 +586,15 @@ class Game:
             if pp.player_id != pid and ROLE_BY_ID.get(pp.role_id) is not None
             and ROLE_BY_ID[pp.role_id].team == Team.TOWNSFOLK
         ]
+        # Spy may register as a townsfolk
+        spy_as_tf = [
+            pp for pp in self.players.values()
+            if pp.player_id != pid and pp.role_id == "spy"
+            and random.random() < self._MISREGISTER_CHANCE
+        ]
+        candidates = townsfolk_players + spy_as_tf
 
-        if is_drunk_or_poisoned or not townsfolk_players:
-            # Give false info
+        if is_drunk_or_poisoned or not candidates:
             all_others = [pp for pp in self.players.values() if pp.player_id != pid]
             if len(all_others) >= 2:
                 pair = random.sample(all_others, 2)
@@ -593,16 +602,12 @@ class Game:
                 await self._send_two_player_info(pid, "washerwoman", pair[0], pair[1], fake_role.id)
             return
 
-        real_tf = random.choice(townsfolk_players)
+        real_tf = random.choice(candidates)
         others = [pp for pp in self.players.values()
                   if pp.player_id not in (pid, real_tf.player_id)]
         wrong = random.choice(others) if others else real_tf
-        shown_role = real_tf.role_id
-
-        # Spy can register as townsfolk
-        if wrong.role_id == "spy" and random.random() < 0.5:
-            shown_role = real_tf.role_id  # spy registers as the shown townsfolk
-
+        shown_role = real_tf.role_id if real_tf not in spy_as_tf \
+            else random.choice(get_roles_by_team(Team.TOWNSFOLK)).id
         await self._send_two_player_info(pid, "washerwoman", real_tf, wrong, shown_role)
 
     async def _action_librarian(self, pid: str) -> None:
@@ -614,6 +619,12 @@ class Game:
             if pp.player_id != pid and ROLE_BY_ID.get(pp.role_id) is not None
             and ROLE_BY_ID[pp.role_id].team == Team.OUTSIDER
         ]
+        spy_as_out = [
+            pp for pp in self.players.values()
+            if pp.player_id != pid and pp.role_id == "spy"
+            and random.random() < self._MISREGISTER_CHANCE
+        ]
+        candidates = outsider_players + spy_as_out
 
         if is_drunk_or_poisoned:
             all_others = [pp for pp in self.players.values() if pp.player_id != pid]
@@ -623,7 +634,7 @@ class Game:
                 await self._send_two_player_info(pid, "librarian", pair[0], pair[1], fake_role.id)
             return
 
-        if not outsider_players:
+        if not candidates:
             await self._send_night_info(pid, {
                 "info_type": "librarian_result",
                 "message": "没有外来者在场。",
@@ -631,11 +642,13 @@ class Game:
             })
             return
 
-        real_out = random.choice(outsider_players)
+        real_out = random.choice(candidates)
         others = [pp for pp in self.players.values()
                   if pp.player_id not in (pid, real_out.player_id)]
         wrong = random.choice(others) if others else real_out
-        await self._send_two_player_info(pid, "librarian", real_out, wrong, real_out.role_id)
+        shown_role = real_out.role_id if real_out not in spy_as_out \
+            else random.choice(get_roles_by_team(Team.OUTSIDER)).id
+        await self._send_two_player_info(pid, "librarian", real_out, wrong, shown_role)
 
     async def _action_investigator(self, pid: str) -> None:
         p = self.players[pid]
@@ -646,8 +659,14 @@ class Game:
             if pp.player_id != pid and ROLE_BY_ID.get(pp.role_id) is not None
             and ROLE_BY_ID[pp.role_id].team == Team.MINION
         ]
+        recluse_as_min = [
+            pp for pp in self.players.values()
+            if pp.player_id != pid and pp.role_id == "recluse"
+            and random.random() < self._MISREGISTER_CHANCE
+        ]
+        candidates = minion_players + recluse_as_min
 
-        if is_drunk_or_poisoned or not minion_players:
+        if is_drunk_or_poisoned or not candidates:
             all_others = [pp for pp in self.players.values() if pp.player_id != pid]
             if len(all_others) >= 2:
                 pair = random.sample(all_others, 2)
@@ -655,16 +674,12 @@ class Game:
                 await self._send_two_player_info(pid, "investigator", pair[0], pair[1], fake_role.id)
             return
 
-        real_min = random.choice(minion_players)
+        real_min = random.choice(candidates)
         others = [pp for pp in self.players.values()
                   if pp.player_id not in (pid, real_min.player_id)]
         wrong = random.choice(others) if others else real_min
-        shown_role = real_min.role_id
-
-        # Recluse might register as minion
-        if wrong.role_id == "recluse" and random.random() < 0.3:
-            shown_role = real_min.role_id
-
+        shown_role = real_min.role_id if real_min not in recluse_as_min \
+            else random.choice(get_roles_by_team(Team.MINION)).id
         await self._send_two_player_info(pid, "investigator", real_min, wrong, shown_role)
 
     async def _action_chef(self, pid: str) -> None:
@@ -674,12 +689,12 @@ class Game:
         if is_drunk_or_poisoned:
             count = random.randint(0, 2)
         else:
+            evil_map = {spid: self._registers_as_evil(self.players[spid])
+                        for spid in self.seat_order}
             count = 0
             for i, spid in enumerate(self.seat_order):
                 next_pid = self.seat_order[(i + 1) % len(self.seat_order)]
-                sp = self.players[spid]
-                np = self.players[next_pid]
-                if self._registers_as_evil(sp) and self._registers_as_evil(np):
+                if evil_map[spid] and evil_map[next_pid]:
                     count += 1
 
         await self._send_night_info(pid, {
@@ -1122,6 +1137,11 @@ class Game:
         elif yes_votes == self._highest_vote[1] and self._highest_vote[0]:
             self._highest_vote = ("", yes_votes)
 
+        for vid, v in self._votes.items():
+            vp = self.players.get(vid)
+            if vp and not vp.alive and v:
+                vp.has_vote_token = False
+
         self._nominations_remaining -= 1
         self.day_sub = DaySubPhase.NOMINATION
         await manager.broadcast(self.room_code, "game_state", self.public_state())
@@ -1241,8 +1261,6 @@ class Game:
                 return
 
         self._votes[voter_id] = vote
-        if not p.alive and vote:
-            p.has_vote_token = False
 
         await manager.broadcast(self.room_code, "game_state", self.public_state())
 
@@ -1382,8 +1400,6 @@ class Game:
             if not p.alive and not vote:
                 vote = False
             self._votes[pid] = vote
-            if not p.alive and vote:
-                p.has_vote_token = False
         # Second pass: butler bots (master has now voted)
         for pid in self.seat_order:
             p = self.players[pid]
@@ -1513,6 +1529,7 @@ class Game:
             return random.choice(options)["id"]
 
         self._pending_action = asyncio.Event()
+        self._pending_action_player = player_id
         self._action_response = {}
 
         await manager.send_personal(self.room_code, player_id, "night_action", {
@@ -1528,6 +1545,7 @@ class Game:
             return random.choice(options)["id"]
         finally:
             self._pending_action = None
+            self._pending_action_player = ""
 
         return self._action_response.get("chosen_id")
 
@@ -1544,6 +1562,7 @@ class Game:
             return [o["id"] for o in picked]
 
         self._pending_action = asyncio.Event()
+        self._pending_action_player = player_id
         self._action_response = {}
 
         await manager.send_personal(self.room_code, player_id, "night_action", {
@@ -1561,10 +1580,13 @@ class Game:
             return [o["id"] for o in picked]
         finally:
             self._pending_action = None
+            self._pending_action_player = ""
 
         return self._action_response.get("chosen_ids")
 
     def submit_action(self, player_id: str, data: dict[str, Any]) -> None:
+        if self._pending_action_player and player_id != self._pending_action_player:
+            return
         self._action_response = data
         if self._pending_action:
             self._pending_action.set()
@@ -1593,20 +1615,23 @@ class Game:
     # Registration helpers (Spy / Recluse)
     # ------------------------------------------------------------------
 
+    # 间谍/隐士的"可能被错误检测"概率，原版由说书人决定，这里用固定概率模拟
+    _MISREGISTER_CHANCE = 0.5
+
     def _registers_as_evil(self, p: PlayerState) -> bool:
         if p.alignment == Alignment.EVIL:
-            if p.role_id == "spy" and random.random() < 0.3:
-                return False  # Spy might register as good
+            if p.role_id == "spy" and random.random() < self._MISREGISTER_CHANCE:
+                return False
             return True
-        if p.role_id == "recluse" and random.random() < 0.3:
-            return True  # Recluse might register as evil
+        if p.role_id == "recluse" and random.random() < self._MISREGISTER_CHANCE:
+            return True
         return False
 
     def _apply_spy_recluse_registration(self, target: PlayerState, default_role: str) -> str:
-        if target.role_id == "spy" and random.random() < 0.5:
+        if target.role_id == "spy" and random.random() < self._MISREGISTER_CHANCE:
             good_roles = get_roles_by_team(Team.TOWNSFOLK) + get_roles_by_team(Team.OUTSIDER)
             return random.choice(good_roles).id
-        if target.role_id == "recluse" and random.random() < 0.3:
+        if target.role_id == "recluse" and random.random() < self._MISREGISTER_CHANCE:
             evil_roles = get_roles_by_team(Team.MINION) + get_roles_by_team(Team.DEMON)
             return random.choice(evil_roles).id
         return default_role

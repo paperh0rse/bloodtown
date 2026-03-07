@@ -129,12 +129,17 @@
             gameState = data;
             isHost = data.host_id === playerId;
 
-            const enteringNight = prevPhase && prevPhase !== data.phase
-                && (data.phase === 'night' || data.phase === 'first_night' || data.phase === 'lobby');
-            if (enteringNight) {
-                nightInfoLog = [];
-                const ni = $('#night-info-container');
-                if (ni) ni.innerHTML = '';
+            if (prevPhase && prevPhase !== data.phase) {
+                dismissAllOverlays();
+                clearSelectableTargets();
+
+                const enteringNight = data.phase === 'night'
+                    || data.phase === 'first_night' || data.phase === 'lobby';
+                if (enteringNight) {
+                    nightInfoLog = [];
+                    const ni = $('#night-info-container');
+                    if (ni) ni.innerHTML = '';
+                }
             }
 
             renderAll();
@@ -553,6 +558,11 @@
             const seat = $(`.town-square .seat[data-player-id="${id}"]`);
             if (seat) seat.classList.add('selected');
         });
+    }
+
+    function dismissAllOverlays() {
+        ['#ingame-confirm', '#voting-overlay', '#end-nom-overlay', '#restart-vote-dialog']
+            .forEach(sel => { const el = $(sel); if (el) el.remove(); });
     }
 
     function hideNightPanel() {
