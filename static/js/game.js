@@ -125,8 +125,16 @@
         });
 
         ws.on('game_state', (data) => {
+            const prevPhase = gameState && gameState.phase;
             gameState = data;
             isHost = data.host_id === playerId;
+
+            if (prevPhase && prevPhase !== data.phase) {
+                nightInfoLog = [];
+                const ni = $('#night-info-container');
+                if (ni) ni.innerHTML = '';
+            }
+
             renderAll();
             if (data.phase !== 'lobby' && !privateState) {
                 ws.send('request_private_state', {});

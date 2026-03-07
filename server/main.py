@@ -299,6 +299,13 @@ async def ws_endpoint(ws: WebSocket, room_code: str):
                         "text": text,
                     })
 
+            # --- Heartbeat ---
+            elif msg_type == "ping":
+                try:
+                    await ws.send_text(json.dumps({"type": "pong", "data": {}}))
+                except Exception:
+                    pass
+
             # --- Leave room ---
             elif msg_type == "leave":
                 is_host = (player_id == game.host_id)

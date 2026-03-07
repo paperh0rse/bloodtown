@@ -38,6 +38,7 @@ class Game:
         self._action_response: dict[str, Any] = {}
         self._signal_events: dict[str, asyncio.Event] = {}
         self._night_deaths: list[str] = []  # player_ids killed tonight
+        self._imp_target: str = ""  # player_id the imp chose to kill this night
         self._executed_today: str = ""  # player_id executed today
 
         # Demon bluffs (3 good roles not in play)
@@ -340,6 +341,8 @@ class Game:
         self.phase = GamePhase.FIRST_NIGHT
         self.day_number = 0
         self._night_deaths = []
+        self._imp_target = ""
+        self._player_night_info.clear()
         self._add_log("phase", "第一个夜晚降临了...")
         await manager.broadcast(self.room_code, "game_state", self.public_state())
         await asyncio.sleep(1)
@@ -393,6 +396,8 @@ class Game:
     async def _run_night(self) -> None:
         self.phase = GamePhase.NIGHT
         self._night_deaths = []
+        self._imp_target = ""
+        self._player_night_info.clear()
         # 第一个白天投票后的夜晚是第2晚，day_number 此时为 1
         night_label = self.day_number + 1
         self._add_log("phase", f"第 {night_label} 个夜晚降临了...")
@@ -429,7 +434,17 @@ class Game:
 
         acting_players.sort(key=lambda x: x[0])
 
+        imp_kill_resolved = False
         for _, pid, role_id in acting_players:
+            if not self.players[pid].alive:
+                continue
+
+            # Right after imp acts, resolve the kill so subsequent roles see correct alive state
+            if not first_night and not imp_kill_resolved and role_id != "imp" and role_id != "monk" and role_id != "poisoner":
+                await self._resolve_imp_kill()
+                imp_kill_resolved = True
+                if not self.players[pid].alive:
+                    continue
 
             if role_id == "poisoner":
                 await self._action_poisoner(pid, first_night)
@@ -458,9 +473,10 @@ class Game:
             elif role_id == "scarlet_woman" and not first_night:
                 pass  # passive, handled in imp death
 
-        # Apply night deaths
         if not first_night:
-            await self._resolve_night_deaths()
+            if not imp_kill_resolved:
+                await self._resolve_imp_kill()
+            await self._announce_night_deaths()
 
     # ------------------------------------------------------------------
     # Individual role actions
@@ -505,11 +521,10 @@ class Game:
         if not target_id or target_id not in self.players:
             return
 
-        target = self.players[target_id]
-
-        # 恶魔自刀传刀：立即结算，不等待；后续夜晚流程继续（掘墓/管家等）由 acting_players 顺序执行
+        # 恶魔自刀传刀：立即结算，不走常规死亡流程
         if target_id == pid:
             self._night_deaths.append(pid)
+            p.alive = False
             alive_minions = [
                 pp for pp in self.players.values()
                 if pp.alive and pp.player_id != pid
@@ -530,25 +545,7 @@ class Game:
                 )
             return
 
-        # Check Soldier immunity
-        if target.role_id == "soldier" and not target.poisoned and not target.drunk:
-            return
-
-        # Check Monk protection
-        if target.protected:
-            return
-
-        # Check Mayor redirect
-        if target.role_id == "mayor" and not target.poisoned and not target.drunk:
-            others = [pp for pp in self.alive_players()
-                      if pp.player_id != target_id and pp.player_id != pid]
-            if others:
-                substitute = random.choice(others)
-                self._night_deaths.append(substitute.player_id)
-                return
-
-        if target.alive:
-            self._night_deaths.append(target_id)
+        self._imp_target = target_id
 
     async def _action_ravenkeeper(self, pid: str) -> None:
         p = self.players[pid]
@@ -823,19 +820,40 @@ class Game:
     # Night death resolution
     # ------------------------------------------------------------------
 
-    async def _resolve_night_deaths(self) -> None:
-        # Deduplicate
-        unique_deaths = list(dict.fromkeys(self._night_deaths))
-        dead_names = []
-        for dpid in unique_deaths:
-            dp = self.players.get(dpid)
-            if dp and dp.alive:
-                dp.alive = False
-                dead_names.append(dp.name)
+    async def _resolve_imp_kill(self) -> None:
+        """Resolve the imp's attack: apply defences, determine actual death,
+        set alive=False, trigger Ravenkeeper. Called right after imp acts."""
+        if not self._imp_target:
+            return
+        target = self.players[self._imp_target]
 
-                # Ravenkeeper triggers on night death
-                if dp.role_id == "ravenkeeper" and not dp.poisoned and not dp.drunk:
-                    await self._action_ravenkeeper(dpid)
+        if target.role_id == "soldier" and not target.poisoned and not target.drunk:
+            self._imp_target = ""
+            return
+        if target.protected:
+            self._imp_target = ""
+            return
+        if target.role_id == "mayor" and not target.poisoned and not target.drunk:
+            others = [pp for pp in self.alive_players()
+                      if pp.player_id != self._imp_target]
+            if others:
+                substitute = random.choice(others)
+                self._night_deaths.append(substitute.player_id)
+                substitute.alive = False
+                if substitute.role_id == "ravenkeeper" and not substitute.poisoned and not substitute.drunk:
+                    await self._action_ravenkeeper(substitute.player_id)
+            self._imp_target = ""
+            return
+
+        self._night_deaths.append(self._imp_target)
+        target.alive = False
+        if target.role_id == "ravenkeeper" and not target.poisoned and not target.drunk:
+            await self._action_ravenkeeper(self._imp_target)
+
+    async def _announce_night_deaths(self) -> None:
+        """Broadcast death announcements and check win conditions.
+        Called once at the end of all night actions."""
+        unique_deaths = list(dict.fromkeys(self._night_deaths))
 
         dead_tags = [self._ptag(self.players[d]) for d in unique_deaths if self.players.get(d)]
         if dead_tags:
@@ -846,14 +864,12 @@ class Game:
         self._add_log("death", msg)
         await manager.broadcast(self.room_code, "night_result", {"message": msg, "deaths": unique_deaths})
 
-        # Check win conditions
         demon_alive = any(
             p.alive and ROLE_BY_ID.get(p.role_id) is not None
             and ROLE_BY_ID[p.role_id].team == Team.DEMON
             for p in self.players.values()
         )
         if not demon_alive:
-            # Check Scarlet Woman
             scarlet = self._find_scarlet_woman()
             if scarlet and self.alive_count() >= 5:
                 scarlet.role_id = "imp"
@@ -1009,7 +1025,7 @@ class Game:
         if nominator.is_bot:
             await asyncio.sleep(0.3)
         else:
-            await self._wait_for_signal("speech_done", timeout=300)
+            await self._wait_for_signal("speech_done", timeout=86400)
 
         if self.phase == GamePhase.GAME_OVER:
             return
@@ -1028,7 +1044,7 @@ class Game:
         if nominee.is_bot:
             await asyncio.sleep(0.3)
         else:
-            await self._wait_for_signal("speech_done", timeout=300)
+            await self._wait_for_signal("speech_done", timeout=86400)
 
         if self.phase == GamePhase.GAME_OVER:
             return
@@ -1767,6 +1783,7 @@ class Game:
         self.log.clear()
         self.demon_bluffs.clear()
         self._night_deaths.clear()
+        self._imp_target = ""
         self._executed_today = ""
         self._signal_events.clear()
         self._pending_action = None

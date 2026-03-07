@@ -8,6 +8,7 @@ class WS {
         this._handlers = {};
         this._reconnectTimer = null;
         this._reconnectDelay = 1000;
+        this._heartbeatTimer = null;
         this.connected = false;
     }
 
@@ -18,6 +19,7 @@ class WS {
         this._ws.onopen = () => {
             this.connected = true;
             this._reconnectDelay = 1000;
+            this._startHeartbeat();
             this._dispatch('_open', {});
         };
 
@@ -33,6 +35,7 @@ class WS {
         this._ws.onclose = () => {
             this.connected = false;
             this._ws = null;
+            this._stopHeartbeat();
             this._dispatch('_close', {});
             this._scheduleReconnect();
         };
@@ -40,6 +43,20 @@ class WS {
         this._ws.onerror = () => {
             this._ws?.close();
         };
+    }
+
+    _startHeartbeat() {
+        this._stopHeartbeat();
+        this._heartbeatTimer = setInterval(() => {
+            if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+                this.send('ping');
+            }
+        }, 25000);
+    }
+
+    _stopHeartbeat() {
+        clearInterval(this._heartbeatTimer);
+        this._heartbeatTimer = null;
     }
 
     send(type, data = {}) {
@@ -67,6 +84,7 @@ class WS {
 
     close() {
         clearTimeout(this._reconnectTimer);
+        this._stopHeartbeat();
         this._ws?.close();
     }
 }

@@ -36,29 +36,35 @@ class ConnectionManager:
             try:
                 await ws.send_text(json.dumps({"type": msg_type, "data": data or {}}, ensure_ascii=False))
             except Exception:
-                pass
+                self._rooms.get(room_code, {}).pop(player_id, None)
 
     async def broadcast(
         self, room_code: str, msg_type: str, data: dict[str, Any] | None = None
     ) -> None:
         payload = json.dumps({"type": msg_type, "data": data or {}}, ensure_ascii=False)
-        for ws in list(self._rooms.get(room_code, {}).values()):
+        dead: list[str] = []
+        for pid, ws in list(self._rooms.get(room_code, {}).items()):
             try:
                 await ws.send_text(payload)
             except Exception:
-                pass
+                dead.append(pid)
+        for pid in dead:
+            self._rooms.get(room_code, {}).pop(pid, None)
 
     async def broadcast_except(
         self, room_code: str, exclude_id: str, msg_type: str, data: dict[str, Any] | None = None
     ) -> None:
         payload = json.dumps({"type": msg_type, "data": data or {}}, ensure_ascii=False)
+        dead: list[str] = []
         for pid, ws in list(self._rooms.get(room_code, {}).items()):
             if pid == exclude_id:
                 continue
             try:
                 await ws.send_text(payload)
             except Exception:
-                pass
+                dead.append(pid)
+        for pid in dead:
+            self._rooms.get(room_code, {}).pop(pid, None)
 
 
 manager = ConnectionManager()
