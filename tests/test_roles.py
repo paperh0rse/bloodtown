@@ -154,6 +154,7 @@ class TestImpNightKill:
 
         with patch.object(game, "_ask_player_choose", return_value="b"):
             await game._action_imp("a")
+        await game._resolve_imp_kill()
 
         assert "b" in game._night_deaths
 
@@ -163,6 +164,7 @@ class TestImpNightKill:
 
         with patch.object(game, "_ask_player_choose", return_value="b"):
             await game._action_imp("a")
+        await game._resolve_imp_kill()
 
         assert "b" not in game._night_deaths
 
@@ -173,6 +175,7 @@ class TestImpNightKill:
 
         with patch.object(game, "_ask_player_choose", return_value="b"):
             await game._action_imp("a")
+        await game._resolve_imp_kill()
 
         assert "b" in game._night_deaths
 
@@ -183,6 +186,7 @@ class TestImpNightKill:
 
         with patch.object(game, "_ask_player_choose", return_value="b"):
             await game._action_imp("a")
+        await game._resolve_imp_kill()
 
         assert "b" not in game._night_deaths
 
@@ -194,6 +198,7 @@ class TestImpNightKill:
         with patch.object(game, "_ask_player_choose", return_value="b"):
             with patch("random.choice", return_value=game.players["c"]):
                 await game._action_imp("a")
+                await game._resolve_imp_kill()
 
         assert "b" not in game._night_deaths
         assert "c" in game._night_deaths
@@ -205,6 +210,7 @@ class TestImpNightKill:
 
         with patch.object(game, "_ask_player_choose", return_value="b"):
             await game._action_imp("a")
+        await game._resolve_imp_kill()
 
         assert "b" in game._night_deaths
 

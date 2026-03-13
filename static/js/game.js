@@ -133,9 +133,7 @@
                 dismissAllOverlays();
                 clearSelectableTargets();
 
-                const enteringNight = data.phase === 'night'
-                    || data.phase === 'first_night' || data.phase === 'lobby';
-                if (enteringNight) {
+                if (data.phase === 'lobby') {
                     nightInfoLog = [];
                     const ni = $('#night-info-container');
                     if (ni) ni.innerHTML = '';

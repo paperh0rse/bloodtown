@@ -343,7 +343,6 @@ class Game:
         self.day_number = 0
         self._night_deaths = []
         self._imp_target = ""
-        self._player_night_info.clear()
         self._add_log("phase", "第一个夜晚降临了...")
         await manager.broadcast(self.room_code, "game_state", self.public_state())
         await asyncio.sleep(1)
@@ -398,7 +397,6 @@ class Game:
         self.phase = GamePhase.NIGHT
         self._night_deaths = []
         self._imp_target = ""
-        self._player_night_info.clear()
         # 第一个白天投票后的夜晚是第2晚，day_number 此时为 1
         night_label = self.day_number + 1
         self._add_log("phase", f"第 {night_label} 个夜晚降临了...")
@@ -435,13 +433,13 @@ class Game:
 
         acting_players.sort(key=lambda x: x[0])
 
+        imp_acted = False
         imp_kill_resolved = False
         for _, pid, role_id in acting_players:
             if not self.players[pid].alive:
                 continue
 
-            # Right after imp acts, resolve the kill so subsequent roles see correct alive state
-            if not first_night and not imp_kill_resolved and role_id != "imp" and role_id != "monk" and role_id != "poisoner":
+            if not first_night and imp_acted and not imp_kill_resolved:
                 await self._resolve_imp_kill()
                 imp_kill_resolved = True
                 if not self.players[pid].alive:
@@ -453,6 +451,7 @@ class Game:
                 await self._action_monk(pid)
             elif role_id == "imp" and not first_night:
                 await self._action_imp(pid)
+                imp_acted = True
             elif role_id == "washerwoman" and first_night:
                 await self._action_washerwoman(pid)
             elif role_id == "librarian" and first_night:
@@ -586,15 +585,8 @@ class Game:
             if pp.player_id != pid and ROLE_BY_ID.get(pp.role_id) is not None
             and ROLE_BY_ID[pp.role_id].team == Team.TOWNSFOLK
         ]
-        # Spy may register as a townsfolk
-        spy_as_tf = [
-            pp for pp in self.players.values()
-            if pp.player_id != pid and pp.role_id == "spy"
-            and random.random() < self._MISREGISTER_CHANCE
-        ]
-        candidates = townsfolk_players + spy_as_tf
 
-        if is_drunk_or_poisoned or not candidates:
+        if is_drunk_or_poisoned or not townsfolk_players:
             all_others = [pp for pp in self.players.values() if pp.player_id != pid]
             if len(all_others) >= 2:
                 pair = random.sample(all_others, 2)
@@ -602,13 +594,21 @@ class Game:
                 await self._send_two_player_info(pid, "washerwoman", pair[0], pair[1], fake_role.id)
             return
 
-        real_tf = random.choice(candidates)
+        real_tf = random.choice(townsfolk_players)
         others = [pp for pp in self.players.values()
                   if pp.player_id not in (pid, real_tf.player_id)]
-        wrong = random.choice(others) if others else real_tf
-        shown_role = real_tf.role_id if real_tf not in spy_as_tf \
-            else random.choice(get_roles_by_team(Team.TOWNSFOLK)).id
-        await self._send_two_player_info(pid, "washerwoman", real_tf, wrong, shown_role)
+
+        spy_as_wrong = [
+            pp for pp in others
+            if pp.role_id == "spy"
+            and random.random() < self._MISREGISTER_CHANCE
+        ]
+        if spy_as_wrong:
+            wrong = random.choice(spy_as_wrong)
+        else:
+            wrong = random.choice(others) if others else real_tf
+
+        await self._send_two_player_info(pid, "washerwoman", real_tf, wrong, real_tf.role_id)
 
     async def _action_librarian(self, pid: str) -> None:
         p = self.players[pid]
@@ -619,12 +619,6 @@ class Game:
             if pp.player_id != pid and ROLE_BY_ID.get(pp.role_id) is not None
             and ROLE_BY_ID[pp.role_id].team == Team.OUTSIDER
         ]
-        spy_as_out = [
-            pp for pp in self.players.values()
-            if pp.player_id != pid and pp.role_id == "spy"
-            and random.random() < self._MISREGISTER_CHANCE
-        ]
-        candidates = outsider_players + spy_as_out
 
         if is_drunk_or_poisoned:
             all_others = [pp for pp in self.players.values() if pp.player_id != pid]
@@ -634,7 +628,7 @@ class Game:
                 await self._send_two_player_info(pid, "librarian", pair[0], pair[1], fake_role.id)
             return
 
-        if not candidates:
+        if not outsider_players:
             await self._send_night_info(pid, {
                 "info_type": "librarian_result",
                 "message": "没有外来者在场。",
@@ -642,13 +636,21 @@ class Game:
             })
             return
 
-        real_out = random.choice(candidates)
+        real_out = random.choice(outsider_players)
         others = [pp for pp in self.players.values()
                   if pp.player_id not in (pid, real_out.player_id)]
-        wrong = random.choice(others) if others else real_out
-        shown_role = real_out.role_id if real_out not in spy_as_out \
-            else random.choice(get_roles_by_team(Team.OUTSIDER)).id
-        await self._send_two_player_info(pid, "librarian", real_out, wrong, shown_role)
+
+        spy_as_wrong = [
+            pp for pp in others
+            if pp.role_id == "spy"
+            and random.random() < self._MISREGISTER_CHANCE
+        ]
+        if spy_as_wrong:
+            wrong = random.choice(spy_as_wrong)
+        else:
+            wrong = random.choice(others) if others else real_out
+
+        await self._send_two_player_info(pid, "librarian", real_out, wrong, real_out.role_id)
 
     async def _action_investigator(self, pid: str) -> None:
         p = self.players[pid]
@@ -659,14 +661,8 @@ class Game:
             if pp.player_id != pid and ROLE_BY_ID.get(pp.role_id) is not None
             and ROLE_BY_ID[pp.role_id].team == Team.MINION
         ]
-        recluse_as_min = [
-            pp for pp in self.players.values()
-            if pp.player_id != pid and pp.role_id == "recluse"
-            and random.random() < self._MISREGISTER_CHANCE
-        ]
-        candidates = minion_players + recluse_as_min
 
-        if is_drunk_or_poisoned or not candidates:
+        if is_drunk_or_poisoned or not minion_players:
             all_others = [pp for pp in self.players.values() if pp.player_id != pid]
             if len(all_others) >= 2:
                 pair = random.sample(all_others, 2)
@@ -674,13 +670,21 @@ class Game:
                 await self._send_two_player_info(pid, "investigator", pair[0], pair[1], fake_role.id)
             return
 
-        real_min = random.choice(candidates)
+        real_min = random.choice(minion_players)
         others = [pp for pp in self.players.values()
                   if pp.player_id not in (pid, real_min.player_id)]
-        wrong = random.choice(others) if others else real_min
-        shown_role = real_min.role_id if real_min not in recluse_as_min \
-            else random.choice(get_roles_by_team(Team.MINION)).id
-        await self._send_two_player_info(pid, "investigator", real_min, wrong, shown_role)
+
+        recluse_as_wrong = [
+            pp for pp in others
+            if pp.role_id == "recluse"
+            and random.random() < self._MISREGISTER_CHANCE
+        ]
+        if recluse_as_wrong:
+            wrong = random.choice(recluse_as_wrong)
+        else:
+            wrong = random.choice(others) if others else real_min
+
+        await self._send_two_player_info(pid, "investigator", real_min, wrong, real_min.role_id)
 
     async def _action_chef(self, pid: str) -> None:
         p = self.players[pid]

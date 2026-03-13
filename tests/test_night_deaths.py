@@ -19,8 +19,9 @@ class TestNightDeathResolution:
     async def test_single_death(self, mock_manager):
         game = make_game({"a": "imp", "b": "washerwoman", "c": "chef", "d": "empath", "e": "poisoner"})
         game._night_deaths = ["b"]
+        game.players["b"].alive = False
 
-        await game._resolve_night_deaths()
+        await game._announce_night_deaths()
 
         assert not game.players["b"].alive
         results = [b for b in mock_manager.broadcasts if b[1] == "night_result"]
@@ -31,7 +32,7 @@ class TestNightDeathResolution:
         game = make_game({"a": "imp", "b": "washerwoman", "c": "chef", "d": "empath", "e": "poisoner"})
         game._night_deaths = []
 
-        await game._resolve_night_deaths()
+        await game._announce_night_deaths()
 
         assert all(p.alive for p in game.players.values())
         results = [b for b in mock_manager.broadcasts if b[1] == "night_result"]
@@ -40,8 +41,9 @@ class TestNightDeathResolution:
     async def test_duplicate_deaths_deduplicated(self, mock_manager):
         game = make_game({"a": "imp", "b": "washerwoman", "c": "chef", "d": "empath", "e": "poisoner"})
         game._night_deaths = ["b", "b", "b"]
+        game.players["b"].alive = False
 
-        await game._resolve_night_deaths()
+        await game._announce_night_deaths()
 
         assert not game.players["b"].alive
         alive_count = sum(1 for p in game.players.values() if p.alive)
@@ -52,7 +54,7 @@ class TestNightDeathResolution:
         kill(game, "b")
         game._night_deaths = ["b"]
 
-        await game._resolve_night_deaths()
+        await game._announce_night_deaths()
 
         alive_count = sum(1 for p in game.players.values() if p.alive)
         assert alive_count == 4  # unchanged
@@ -68,8 +70,9 @@ class TestNightDeathWinConditions:
         """If demon dies at night (e.g. imp self-kill with no minion), good wins."""
         game = make_game({"a": "imp", "b": "washerwoman", "c": "chef", "d": "empath", "e": "saint"})
         game._night_deaths = ["a"]
+        game.players["a"].alive = False
 
-        await game._resolve_night_deaths()
+        await game._announce_night_deaths()
 
         assert game.phase == GamePhase.GAME_OVER
         wins = [b for b in mock_manager.broadcasts if b[1] == "game_over"]
@@ -82,8 +85,9 @@ class TestNightDeathWinConditions:
             "d": "chef", "e": "empath", "f": "soldier",
         })
         game._night_deaths = ["a"]
+        game.players["a"].alive = False
 
-        await game._resolve_night_deaths()
+        await game._announce_night_deaths()
 
         assert game.phase != GamePhase.GAME_OVER
         assert game.players["b"].role_id == "imp"
@@ -91,8 +95,9 @@ class TestNightDeathWinConditions:
     async def test_two_alive_after_night_evil_wins(self, mock_manager):
         game = make_game({"a": "imp", "b": "poisoner", "c": "washerwoman"})
         game._night_deaths = ["c"]
+        game.players["c"].alive = False
 
-        await game._resolve_night_deaths()
+        await game._announce_night_deaths()
 
         assert game.phase == GamePhase.GAME_OVER
         wins = [b for b in mock_manager.broadcasts if b[1] == "game_over"]
@@ -102,8 +107,10 @@ class TestNightDeathWinConditions:
         """Multiple night deaths can trigger evil win."""
         game = make_game({"a": "imp", "b": "poisoner", "c": "washerwoman", "d": "chef"})
         game._night_deaths = ["c", "d"]
+        game.players["c"].alive = False
+        game.players["d"].alive = False
 
-        await game._resolve_night_deaths()
+        await game._announce_night_deaths()
 
         assert game.phase == GamePhase.GAME_OVER
         wins = [b for b in mock_manager.broadcasts if b[1] == "game_over"]
@@ -118,37 +125,37 @@ class TestRavenkeeperNightDeath:
 
     async def test_ravenkeeper_triggers_on_death(self, mock_manager):
         game = make_game({"a": "imp", "b": "ravenkeeper", "c": "chef", "d": "empath", "e": "poisoner"})
-        game._night_deaths = ["b"]
+        game._imp_target = "b"
 
         with patch.object(game, "_action_ravenkeeper") as mock_rk:
-            await game._resolve_night_deaths()
+            await game._resolve_imp_kill()
             mock_rk.assert_called_once_with("b")
 
     async def test_poisoned_ravenkeeper_no_trigger(self, mock_manager):
         game = make_game({"a": "imp", "b": "ravenkeeper", "c": "chef", "d": "empath", "e": "poisoner"})
         game.players["b"].poisoned = True
-        game._night_deaths = ["b"]
+        game._imp_target = "b"
 
         with patch.object(game, "_action_ravenkeeper") as mock_rk:
-            await game._resolve_night_deaths()
+            await game._resolve_imp_kill()
             mock_rk.assert_not_called()
 
     async def test_drunk_ravenkeeper_no_trigger(self, mock_manager):
         game = make_game({"a": "imp", "b": "ravenkeeper", "c": "chef", "d": "empath", "e": "poisoner"})
         game.players["b"].drunk = True
-        game._night_deaths = ["b"]
+        game._imp_target = "b"
 
         with patch.object(game, "_action_ravenkeeper") as mock_rk:
-            await game._resolve_night_deaths()
+            await game._resolve_imp_kill()
             mock_rk.assert_not_called()
 
     async def test_ravenkeeper_alive_no_trigger(self, mock_manager):
         """Ravenkeeper not in _night_deaths → no trigger."""
         game = make_game({"a": "imp", "b": "ravenkeeper", "c": "chef", "d": "empath", "e": "poisoner"})
-        game._night_deaths = ["c"]
+        game._imp_target = "c"
 
         with patch.object(game, "_action_ravenkeeper") as mock_rk:
-            await game._resolve_night_deaths()
+            await game._resolve_imp_kill()
             mock_rk.assert_not_called()
 
 

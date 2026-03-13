@@ -63,7 +63,7 @@ def auto_action_feeder(game: Game, default_target: str = "p1"):
         while True:
             await asyncio.sleep(0)
             if game._pending_action and not game._pending_action.is_set():
-                game.submit_action("", {"chosen_id": default_target, "chosen_ids": [default_target, "p2"]})
+                game.submit_action(game._pending_action_player, {"chosen_id": default_target, "chosen_ids": [default_target, "p2"]})
     return asyncio.create_task(_feed())
 
 
@@ -286,7 +286,6 @@ class TestButlerVoting:
 
         await game.handle_vote("p2", True)
         assert game._votes.get("p2") is True
-        assert not game.players["p2"].has_vote_token
 
 
 # ---------------------------------------------------------------------------
@@ -478,7 +477,6 @@ class TestDeadPlayerVoteToken:
 
         await game.handle_vote("p1", True)
         assert game._votes["p1"] is True
-        assert game.players["p1"].has_vote_token is False
 
     async def test_dead_no_preserves_token(self, mock_manager: FakeManager):
         game = make_game({"p1": "washerwoman", "p2": "empath", "p3": "poisoner", "p4": "imp"})

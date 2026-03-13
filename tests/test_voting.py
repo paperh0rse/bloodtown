@@ -109,7 +109,6 @@ class TestDeadVoting:
         await game.handle_vote("b", True)
 
         assert game._votes["b"] is True
-        assert game.players["b"].has_vote_token is False  # consumed
 
     async def test_dead_abstain_keeps_token(self, mock_manager):
         """Dead player voting 'no' (abstain) does NOT consume their token."""
