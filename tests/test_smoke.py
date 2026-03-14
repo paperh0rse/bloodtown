@@ -12,11 +12,59 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from server.game_engine import Game
+from server.game_engine import Game, MIN_NIGHT_WAIT
 from server.models import Alignment, DaySubPhase, GamePhase, Team
 from server.role_data import ROLE_BY_ID
 
 from tests.conftest import FakeManager, make_game, kill
+
+
+class _PatchNight:
+    """Context manager that patches both _collect_player_choose and
+    _wait_all_parallel for instant test execution."""
+
+    def __init__(self, game: Game, choice_fn):
+        self.game = game
+        self.choice_fn = choice_fn
+        self._patches = []
+
+    async def _patched_collect(self, pid, action_type, prompt, options, choose_count=1):
+        if not options or (choose_count > 1 and len(options) < choose_count):
+            return
+        result = self.choice_fn(pid, action_type, prompt, options)
+        if result is None:
+            if choose_count > 1:
+                result = [o["id"] for o in options[:choose_count]]
+            else:
+                result = options[0]["id"] if options else None
+
+        evt = asyncio.Event()
+        evt.set()
+        self.game._pending_actions[pid] = evt
+        if choose_count > 1:
+            ids = result if isinstance(result, list) else [result]
+            self.game._action_responses[pid] = {"chosen_ids": ids}
+        else:
+            self.game._action_responses[pid] = {"chosen_id": result}
+
+    async def _patched_wait(self, min_wait=0):
+        self.game._pending_actions.clear()
+
+    def __enter__(self):
+        p1 = patch.object(self.game, "_collect_player_choose", side_effect=self._patched_collect)
+        p2 = patch.object(self.game, "_wait_all_parallel", side_effect=self._patched_wait)
+        self._patches = [p1, p2]
+        for p in self._patches:
+            p.start()
+        return self
+
+    def __exit__(self, *args):
+        for p in self._patches:
+            p.stop()
+
+
+def patch_collect(game: Game, choice_fn):
+    return _PatchNight(game, choice_fn)
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +110,11 @@ def auto_action_feeder(game: Game, default_target: str = "p1"):
     async def _feed():
         while True:
             await asyncio.sleep(0)
+            # Parallel actions
+            for pid, evt in list(game._pending_actions.items()):
+                if not evt.is_set() and pid not in game._action_responses:
+                    game.submit_action(pid, {"chosen_id": default_target, "chosen_ids": [default_target, "p2"]})
+            # Legacy single-player action (ravenkeeper)
             if game._pending_action and not game._pending_action.is_set():
                 game.submit_action(game._pending_action_player, {"chosen_id": default_target, "chosen_ids": [default_target, "p2"]})
     return asyncio.create_task(_feed())
@@ -311,7 +364,7 @@ class TestImpStarpass:
 
         action_log = []
 
-        async def mock_ask(pid, action_type, prompt, options):
+        def choose(pid, action_type, prompt, options):
             action_log.append((pid, action_type))
             if pid == "p5" and action_type == "poison_target":
                 return "p1"
@@ -319,17 +372,17 @@ class TestImpStarpass:
                 return "p2"
             if pid == "p6" and action_type == "imp_kill":
                 return "p6"  # self-kill
+            if action_type == "fortune_teller_pick":
+                return ["p1", "p2"]
             return options[0]["id"] if options else None
 
-        with patch.object(game, "_ask_player_choose", side_effect=mock_ask):
-            with patch.object(game, "_ask_player_choose_two", return_value=["p1", "p2"]):
-                await game._process_night_actions(first_night=False)
+        with patch_collect(game, choose):
+            await game._process_night_actions(first_night=False)
 
         assert not game.players["p6"].alive
         assert game.players["p5"].role_id == "imp"
         assert game._night_deaths == ["p6"]
 
-        # p5 should only have acted once as poisoner, NOT as imp
         p5_actions = [at for pid, at in action_log if pid == "p5"]
         assert p5_actions == ["poison_target"]
 
@@ -348,18 +401,19 @@ class TestImpStarpass:
             p.poisoned = False
             p.protected = False
 
-        async def mock_ask(pid, action_type, prompt, options):
+        def choose(pid, action_type, prompt, options):
             if pid == "p5":
                 return "p1"
             if pid == "p4":
                 return "p2"
             if pid == "p6":
                 return "p6"
+            if action_type == "fortune_teller_pick":
+                return ["p1", "p2"]
             return options[0]["id"]
 
-        with patch.object(game, "_ask_player_choose", side_effect=mock_ask):
-            with patch.object(game, "_ask_player_choose_two", return_value=["p1", "p2"]):
-                await game._process_night_actions(first_night=False)
+        with patch_collect(game, choose):
+            await game._process_night_actions(first_night=False)
 
         became = [d for d in personal_msgs(mock_manager, "p5", "night_info")
                   if d.get("info_type") == "became_demon"]
@@ -389,7 +443,7 @@ class TestDeadPlayersNoNightInfo:
 
         asked_players = []
 
-        async def mock_ask(pid, action_type, prompt, options):
+        def choose(pid, action_type, prompt, options):
             asked_players.append(pid)
             if pid == "p4":
                 return "p2"
@@ -397,7 +451,7 @@ class TestDeadPlayersNoNightInfo:
                 return "p2"
             return options[0]["id"]
 
-        with patch.object(game, "_ask_player_choose", side_effect=mock_ask):
+        with patch_collect(game, choose):
             await game._process_night_actions(first_night=False)
 
         assert "p1" not in asked_players
@@ -418,14 +472,14 @@ class TestDeadPlayersNoNightInfo:
             p.poisoned = False
             p.protected = False
 
-        async def mock_ask(pid, action_type, prompt, options):
+        def choose(pid, action_type, prompt, options):
             if pid == "p4":
                 return "p2"
             if pid == "p5":
                 return "p3"
             return options[0]["id"]
 
-        with patch.object(game, "_ask_player_choose", side_effect=mock_ask):
+        with patch_collect(game, choose):
             await game._process_night_actions(first_night=False)
 
         assert len(personal_msgs(mock_manager, "p1", "night_info")) == 0
@@ -447,7 +501,7 @@ class TestDeadPlayersNoNightInfo:
 
         asked_players = []
 
-        async def mock_ask(pid, action_type, prompt, options):
+        def choose(pid, action_type, prompt, options):
             asked_players.append(pid)
             if pid == "p4":
                 return "p2"
@@ -455,7 +509,7 @@ class TestDeadPlayersNoNightInfo:
                 return "p3"
             return options[0]["id"]
 
-        with patch.object(game, "_ask_player_choose", side_effect=mock_ask):
+        with patch_collect(game, choose):
             await game._process_night_actions(first_night=False)
 
         assert "p1" not in asked_players
@@ -522,10 +576,10 @@ class TestNightInfoReconnect:
             p.poisoned = False
             p.protected = False
 
-        async def mock_ask(pid, action_type, prompt, options):
+        def choose(pid, action_type, prompt, options):
             return options[0]["id"]
 
-        with patch.object(game, "_ask_player_choose", side_effect=mock_ask):
+        with patch_collect(game, choose):
             await game._process_night_actions(first_night=True)
 
         stored = game.get_player_night_info("p1")
@@ -617,7 +671,7 @@ class TestRoleSnapshotNightActions:
 
         action_log = []
 
-        async def mock_ask(pid, action_type, prompt, options):
+        def choose(pid, action_type, prompt, options):
             action_log.append((pid, action_type))
             if pid == "p5" and action_type == "poison_target":
                 return "p1"
@@ -625,11 +679,12 @@ class TestRoleSnapshotNightActions:
                 return "p2"
             if pid == "p6" and action_type == "imp_kill":
                 return "p6"
+            if action_type == "fortune_teller_pick":
+                return ["p1", "p2"]
             return options[0]["id"]
 
-        with patch.object(game, "_ask_player_choose", side_effect=mock_ask):
-            with patch.object(game, "_ask_player_choose_two", return_value=["p1", "p2"]):
-                await game._process_night_actions(first_night=False)
+        with patch_collect(game, choose):
+            await game._process_night_actions(first_night=False)
 
         p5_actions = [(pid, at) for pid, at in action_log if pid == "p5"]
         assert len(p5_actions) == 1

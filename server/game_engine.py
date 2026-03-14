@@ -19,6 +19,7 @@ from server.role_data import ROLE_BY_ID, get_roles_by_team
 from server.ws_manager import manager
 
 NIGHT_ACTION_TIMEOUT = 60  # seconds
+MIN_NIGHT_WAIT = 20  # minimum seconds the night phase lasts (anti-meta)
 
 
 class Game:
@@ -33,7 +34,11 @@ class Game:
         self.seat_order: list[str] = []  # player_ids in seat order
         self.host_id: str = ""
 
-        # Night state
+        # Night state – parallel action collection
+        self._pending_actions: dict[str, asyncio.Event] = {}  # pid -> Event
+        self._action_responses: dict[str, dict[str, Any]] = {}  # pid -> response
+        self._pending_options: dict[str, tuple[list[dict], int]] = {}  # pid -> (options, choose_count)
+        # Legacy single-player fallback (ravenkeeper mid-resolve)
         self._pending_action: asyncio.Event | None = None
         self._pending_action_player: str = ""
         self._action_response: dict[str, Any] = {}
@@ -55,6 +60,7 @@ class Game:
         self._nominated_today: set[str] = set()
         self._nominators_today: set[str] = set()
         self._current_nominee: str = ""
+        self._current_nominator: str = ""
         self._votes: dict[str, bool] = {}
         self._vote_eligible_count: int = 0
         self._butler_blocked: set[str] = set()
@@ -260,6 +266,20 @@ class Game:
 
         voted_players = list(self._votes.keys()) if self.day_sub == DaySubPhase.VOTING else []
 
+        voting_info = None
+        if self.day_sub in (DaySubPhase.NOMINATOR_SPEECH, DaySubPhase.NOMINEE_SPEECH, DaySubPhase.VOTING):
+            nr = self.players.get(self._current_nominator)
+            ne = self.players.get(self._current_nominee)
+            if nr and ne:
+                voting_info = {
+                    "nominator": self._current_nominator,
+                    "nominator_name": nr.name,
+                    "nominator_seat": nr.seat + 1,
+                    "nominee": self._current_nominee,
+                    "nominee_name": ne.name,
+                    "nominee_seat": ne.seat + 1,
+                }
+
         return {
             "phase": self.phase.value,
             "day_sub": self.day_sub.value if self.phase in (GamePhase.DAY, GamePhase.FIRST_NIGHT, GamePhase.NIGHT) else "",
@@ -275,6 +295,7 @@ class Game:
             "nominators_today": list(self._nominators_today),
             "nominated_today": list(self._nominated_today),
             "voted_players": voted_players,
+            "voting_info": voting_info,
             "log": self.log[-20:],
             "restart_vote": self._restart_vote_state(),
         }
@@ -414,7 +435,17 @@ class Game:
     # Night action processing
     # ------------------------------------------------------------------
 
+    _ROLES_NEEDING_CHOICE: set[str] = {
+        "poisoner", "monk", "imp", "fortune_teller", "butler",
+    }
+
     async def _process_night_actions(self, first_night: bool) -> None:
+        """Parallel-collect then sequential-resolve night actions.
+
+        1. Send prompts to ALL players with night abilities simultaneously.
+        2. Wait until every choice is in AND at least MIN_NIGHT_WAIT has elapsed.
+        3. Resolve in night-order (poisoner first so poison affects later info).
+        """
         order_attr = "first_night_order" if first_night else "other_night_order"
 
         acting_players: list[tuple[int, str, str]] = []
@@ -422,7 +453,6 @@ class Game:
             p = self.players[pid]
             if not p.alive:
                 continue
-            # Drunk acts as their apparent role (but drunk, so info is false)
             acting_role = p.apparent_role_id if p.drunk and p.apparent_role_id else p.role_id
             role_def = ROLE_BY_ID.get(acting_role)
             if not role_def:
@@ -433,25 +463,62 @@ class Game:
 
         acting_players.sort(key=lambda x: x[0])
 
-        imp_acted = False
+        # -- Phase 1: send all prompts in parallel --
+        self._pending_actions.clear()
+        self._action_responses.clear()
+
+        prompted_pids: set[str] = set()
+        for _, pid, role_id in acting_players:
+            if role_id == "poisoner":
+                await self._collect_poisoner(pid)
+                prompted_pids.add(pid)
+            elif role_id == "monk" and not first_night:
+                await self._collect_monk(pid)
+                prompted_pids.add(pid)
+            elif role_id == "imp" and not first_night:
+                await self._collect_imp(pid)
+                prompted_pids.add(pid)
+            elif role_id == "fortune_teller":
+                await self._collect_fortune_teller(pid)
+                prompted_pids.add(pid)
+            elif role_id == "butler":
+                await self._collect_butler(pid)
+                prompted_pids.add(pid)
+
+        # Players without a choice prompt get a waiting message
+        for pid in self.seat_order:
+            p = self.players[pid]
+            if not p.alive:
+                continue
+            if pid not in prompted_pids:
+                await manager.send_personal(
+                    self.room_code, pid, "night_waiting",
+                    {"message": "夜晚进行中，请安静等待..."},
+                )
+
+        # -- Phase 2: wait for all choices + minimum night duration --
+        await self._wait_all_parallel()
+
+        # -- Phase 3: resolve in night-order --
         imp_kill_resolved = False
+        has_imp_choice = False
         for _, pid, role_id in acting_players:
             if not self.players[pid].alive:
                 continue
 
-            if not first_night and imp_acted and not imp_kill_resolved:
+            if not first_night and has_imp_choice and not imp_kill_resolved:
                 await self._resolve_imp_kill()
                 imp_kill_resolved = True
                 if not self.players[pid].alive:
                     continue
 
             if role_id == "poisoner":
-                await self._action_poisoner(pid, first_night)
+                await self._resolve_poisoner(pid)
             elif role_id == "monk" and not first_night:
-                await self._action_monk(pid)
+                await self._resolve_monk(pid)
             elif role_id == "imp" and not first_night:
-                await self._action_imp(pid)
-                imp_acted = True
+                await self._resolve_imp_choice(pid)
+                has_imp_choice = True
             elif role_id == "washerwoman" and first_night:
                 await self._action_washerwoman(pid)
             elif role_id == "librarian" and first_night:
@@ -463,11 +530,11 @@ class Game:
             elif role_id == "empath":
                 await self._action_empath(pid)
             elif role_id == "fortune_teller":
-                await self._action_fortune_teller(pid)
+                await self._resolve_fortune_teller(pid)
             elif role_id == "undertaker" and not first_night:
                 await self._action_undertaker(pid)
             elif role_id == "butler":
-                await self._action_butler(pid)
+                await self._resolve_butler(pid)
             elif role_id == "spy":
                 await self._action_spy(pid)
             elif role_id == "scarlet_woman" and not first_night:
@@ -479,10 +546,29 @@ class Game:
             await self._announce_night_deaths()
 
     # ------------------------------------------------------------------
-    # Individual role actions
+    # Individual role actions – collect (send prompt) / resolve (apply)
     # ------------------------------------------------------------------
 
-    async def _action_poisoner(self, pid: str, first_night: bool) -> None:
+    # --- Poisoner ---
+
+    async def _collect_poisoner(self, pid: str) -> None:
+        p = self.players[pid]
+        if not p.alive:
+            return
+        targets = [pp for pp in self.alive_players() if pp.player_id != pid]
+        await self._collect_player_choose(
+            pid, "poison_target",
+            "选择一名玩家进行投毒（该玩家今晚和明天中毒）：",
+            [{"id": t.player_id, "name": f"{t.seat+1}号 {t.name}"} for t in targets],
+        )
+
+    async def _resolve_poisoner(self, pid: str) -> None:
+        target_id = self._get_parallel_choice(pid)
+        if target_id and target_id in self.players:
+            self.players[target_id].poisoned = True
+
+    async def _action_poisoner(self, pid: str, first_night: bool = False) -> None:
+        """Blocking entry point (used by tests and ravenkeeper-style serial calls)."""
         p = self.players[pid]
         if not p.alive:
             return
@@ -495,7 +581,29 @@ class Game:
         if target_id and target_id in self.players:
             self.players[target_id].poisoned = True
 
+    # --- Monk ---
+
+    async def _collect_monk(self, pid: str) -> None:
+        p = self.players[pid]
+        if not p.alive:
+            return
+        targets = [pp for pp in self.alive_players() if pp.player_id != pid]
+        await self._collect_player_choose(
+            pid, "monk_protect",
+            "选择一名其他玩家进行保护（今晚免受恶魔攻击）：",
+            [{"id": t.player_id, "name": f"{t.seat+1}号 {t.name}"} for t in targets],
+        )
+
+    async def _resolve_monk(self, pid: str) -> None:
+        p = self.players[pid]
+        if not p.alive or p.poisoned or p.drunk:
+            return
+        target_id = self._get_parallel_choice(pid)
+        if target_id and target_id in self.players:
+            self.players[target_id].protected = True
+
     async def _action_monk(self, pid: str) -> None:
+        """Blocking entry point (used by tests and ravenkeeper-style serial calls)."""
         p = self.players[pid]
         if not p.alive or p.poisoned or p.drunk:
             return
@@ -508,20 +616,29 @@ class Game:
         if target_id and target_id in self.players:
             self.players[target_id].protected = True
 
-    async def _action_imp(self, pid: str) -> None:
+    # --- Imp ---
+
+    async def _collect_imp(self, pid: str) -> None:
         p = self.players[pid]
         if not p.alive:
             return
-        all_players = [pp for pp in self.players.values()]
-        target_id = await self._ask_player_choose(
+        all_players = list(self.players.values())
+        await self._collect_player_choose(
             pid, "imp_kill",
             "选择一名玩家进行攻击：",
             [{"id": t.player_id, "name": f"{t.seat+1}号 {t.name}"} for t in all_players],
         )
+
+    async def _resolve_imp_choice(self, pid: str) -> None:
+        """Apply the imp's choice (self-stab or set target). Does NOT resolve
+        the actual kill – that is done by _resolve_imp_kill later."""
+        p = self.players[pid]
+        if not p.alive:
+            return
+        target_id = self._get_parallel_choice(pid)
         if not target_id or target_id not in self.players:
             return
 
-        # 恶魔自刀传刀：僧侣保护可阻止
         if target_id == pid:
             if p.protected:
                 return
@@ -548,6 +665,23 @@ class Game:
             return
 
         self._imp_target = target_id
+
+    async def _action_imp(self, pid: str) -> None:
+        """Blocking entry point (used by tests)."""
+        p = self.players[pid]
+        if not p.alive:
+            return
+        all_players = list(self.players.values())
+        target_id = await self._ask_player_choose(
+            pid, "imp_kill",
+            "选择一名玩家进行攻击：",
+            [{"id": t.player_id, "name": f"{t.seat+1}号 {t.name}"} for t in all_players],
+        )
+        if not target_id or target_id not in self.players:
+            return
+        # Store in parallel response dict so _resolve_imp_choice can read it
+        self._action_responses[pid] = {"chosen_id": target_id}
+        await self._resolve_imp_choice(pid)
 
     async def _action_ravenkeeper(self, pid: str) -> None:
         p = self.players[pid]
@@ -728,19 +862,26 @@ class Game:
             "count": count,
         })
 
-    async def _action_fortune_teller(self, pid: str) -> None:
+    async def _collect_fortune_teller(self, pid: str) -> None:
         p = self.players[pid]
         if not p.alive:
             return
         targets = [pp for pp in self.players.values() if pp.player_id != pid]
-        chosen = await self._ask_player_choose_two(
+        await self._collect_player_choose(
             pid, "fortune_teller_pick",
             "选择2名玩家进行占卜（得知其中是否有恶魔）：",
             [{"id": t.player_id, "name": f"{t.seat+1}号 {t.name}"} for t in targets],
+            choose_count=2,
         )
 
+    async def _resolve_fortune_teller(self, pid: str) -> None:
+        p = self.players[pid]
+        if not p.alive:
+            return
+        chosen = self._get_parallel_choices(pid)
+        targets = [pp for pp in self.players.values() if pp.player_id != pid]
+
         if not chosen or len(chosen) < 2:
-            # Auto-pick
             if len(targets) >= 2:
                 auto = random.sample(targets, 2)
                 chosen = [auto[0].player_id, auto[1].player_id]
@@ -772,6 +913,21 @@ class Game:
             "targets": chosen,
         })
 
+    async def _action_fortune_teller(self, pid: str) -> None:
+        """Blocking entry point (used by tests)."""
+        p = self.players[pid]
+        if not p.alive:
+            return
+        targets = [pp for pp in self.players.values() if pp.player_id != pid]
+        chosen = await self._ask_player_choose_two(
+            pid, "fortune_teller_pick",
+            "选择2名玩家进行占卜（得知其中是否有恶魔）：",
+            [{"id": t.player_id, "name": f"{t.seat+1}号 {t.name}"} for t in targets],
+        )
+        if chosen and len(chosen) >= 2:
+            self._action_responses[pid] = {"chosen_ids": chosen}
+        await self._resolve_fortune_teller(pid)
+
     async def _action_undertaker(self, pid: str) -> None:
         p = self.players[pid]
         if not p.alive:
@@ -799,7 +955,27 @@ class Game:
             "role_name": role_def.name_zh if role_def else shown_role,
         })
 
+    async def _collect_butler(self, pid: str) -> None:
+        p = self.players[pid]
+        if not p.alive:
+            return
+        targets = [pp for pp in self.alive_players() if pp.player_id != pid]
+        await self._collect_player_choose(
+            pid, "butler_master",
+            "选择一名玩家作为你的主人（明天投票时你只能跟随主人投票）：",
+            [{"id": t.player_id, "name": f"{t.seat+1}号 {t.name}"} for t in targets],
+        )
+
+    async def _resolve_butler(self, pid: str) -> None:
+        p = self.players[pid]
+        if not p.alive:
+            return
+        target_id = self._get_parallel_choice(pid)
+        if target_id and target_id in self.players:
+            p.butler_master_id = target_id
+
     async def _action_butler(self, pid: str) -> None:
+        """Blocking entry point (used by tests)."""
         p = self.players[pid]
         if not p.alive:
             return
@@ -919,6 +1095,7 @@ class Game:
         self._nominated_today = set()
         self._nominators_today = set()
         self._current_nominee = ""
+        self._current_nominator = ""
         self._votes = {}
         self._butler_blocked = set()
         self._vote_tally = {}
@@ -1036,6 +1213,7 @@ class Game:
         # --- Phase 1: Nominator speech ---
         self.day_sub = DaySubPhase.NOMINATOR_SPEECH
         self._current_nominee = nominee_id
+        self._current_nominator = nominator_id
         self._speech_player = nominator_id
         await manager.broadcast(self.room_code, "game_state", self.public_state())
         await manager.broadcast(self.room_code, "speech_start", {
@@ -1151,6 +1329,8 @@ class Game:
                 vp.has_vote_token = False
 
         self._nominations_remaining -= 1
+        self._current_nominee = ""
+        self._current_nominator = ""
         self.day_sub = DaySubPhase.NOMINATION
         await manager.broadcast(self.room_code, "game_state", self.public_state())
 
@@ -1592,7 +1772,87 @@ class Game:
 
         return self._action_response.get("chosen_ids")
 
+    async def _collect_player_choose(
+        self, player_id: str, action_type: str, prompt: str, options: list[dict],
+        choose_count: int = 1,
+    ) -> None:
+        """Send a night-action prompt and register an Event for parallel collection.
+        Does NOT block – the caller waits on all events later."""
+        if not options or (choose_count > 1 and len(options) < choose_count):
+            return
+
+        p = self.players.get(player_id)
+        if p and p.is_bot:
+            await asyncio.sleep(random.uniform(0.3, 1.0))
+            if choose_count == 1:
+                picked = random.choice(options)
+                self._action_responses[player_id] = {"chosen_id": picked["id"]}
+            else:
+                picked = random.sample(options, choose_count)
+                self._action_responses[player_id] = {"chosen_ids": [o["id"] for o in picked]}
+            evt = asyncio.Event()
+            evt.set()
+            self._pending_actions[player_id] = evt
+            return
+
+        evt = asyncio.Event()
+        self._pending_actions[player_id] = evt
+        self._pending_options[player_id] = (options, choose_count)
+
+        payload: dict[str, Any] = {
+            "action_type": action_type,
+            "prompt": prompt,
+            "options": options,
+            "timeout": NIGHT_ACTION_TIMEOUT,
+        }
+        if choose_count > 1:
+            payload["choose_count"] = choose_count
+        await manager.send_personal(self.room_code, player_id, "night_action", payload)
+
+    def _get_parallel_choice(self, player_id: str) -> str | None:
+        """Read a single-choice result collected in parallel."""
+        return self._action_responses.get(player_id, {}).get("chosen_id")
+
+    def _get_parallel_choices(self, player_id: str) -> list[str] | None:
+        """Read a multi-choice result collected in parallel."""
+        return self._action_responses.get(player_id, {}).get("chosen_ids")
+
+    async def _wait_all_parallel(self, min_wait: float = MIN_NIGHT_WAIT) -> None:
+        """Wait for all pending parallel actions to complete or time out,
+        and enforce the minimum night duration."""
+        if not self._pending_actions:
+            if min_wait > 0:
+                await asyncio.sleep(min_wait)
+            return
+
+        async def _wait_single(pid: str, evt: asyncio.Event) -> None:
+            try:
+                await asyncio.wait_for(evt.wait(), timeout=NIGHT_ACTION_TIMEOUT)
+            except asyncio.TimeoutError:
+                if pid not in self._action_responses:
+                    opts, count = self._pending_options.get(pid, ([], 1))
+                    if opts and count == 1:
+                        self._action_responses[pid] = {"chosen_id": random.choice(opts)["id"]}
+                    elif opts and count > 1 and len(opts) >= count:
+                        picked = random.sample(opts, count)
+                        self._action_responses[pid] = {"chosen_ids": [o["id"] for o in picked]}
+                    else:
+                        self._action_responses[pid] = {}
+
+        waiters = [_wait_single(pid, evt) for pid, evt in self._pending_actions.items()]
+        if min_wait > 0:
+            waiters.append(asyncio.sleep(min_wait))
+        await asyncio.gather(*waiters)
+        self._pending_actions.clear()
+        self._pending_options.clear()
+
     def submit_action(self, player_id: str, data: dict[str, Any]) -> None:
+        # Parallel collection path
+        if player_id in self._pending_actions:
+            self._action_responses[player_id] = data
+            self._pending_actions[player_id].set()
+            return
+        # Legacy single-player path (ravenkeeper mid-resolve)
         if self._pending_action_player and player_id != self._pending_action_player:
             return
         self._action_response = data
@@ -1819,11 +2079,15 @@ class Game:
         self._imp_target = ""
         self._executed_today = ""
         self._signal_events.clear()
+        self._pending_actions.clear()
+        self._action_responses.clear()
+        self._pending_options.clear()
         self._pending_action = None
         self._action_response.clear()
         self._nominated_today.clear()
         self._nominators_today.clear()
         self._current_nominee = ""
+        self._current_nominator = ""
         self._votes.clear()
         self._butler_blocked.clear()
         self._vote_eligible_count = 0

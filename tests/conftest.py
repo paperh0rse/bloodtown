@@ -81,6 +81,27 @@ def kill(game: Game, pid: str) -> None:
     game.players[pid].alive = False
 
 
+def set_choice(game: Game, pid: str, chosen_id: str | None) -> None:
+    """Pre-set a parallel action response for a player (simulates player choice)."""
+    import asyncio
+    evt = asyncio.Event()
+    evt.set()
+    game._pending_actions[pid] = evt
+    if chosen_id is not None:
+        game._action_responses[pid] = {"chosen_id": chosen_id}
+    else:
+        game._action_responses[pid] = {}
+
+
+def set_choices(game: Game, pid: str, chosen_ids: list[str]) -> None:
+    """Pre-set a parallel multi-choice response for a player."""
+    import asyncio
+    evt = asyncio.Event()
+    evt.set()
+    game._pending_actions[pid] = evt
+    game._action_responses[pid] = {"chosen_ids": chosen_ids}
+
+
 def poison(game: Game, pid: str) -> None:
     """Poison a player."""
     game.players[pid].poisoned = True

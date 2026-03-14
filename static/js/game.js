@@ -132,6 +132,7 @@
             if (prevPhase && prevPhase !== data.phase) {
                 dismissAllOverlays();
                 clearSelectableTargets();
+                hideNightPanel();
 
                 if (data.phase === 'lobby') {
                     nightInfoLog = [];
@@ -160,6 +161,18 @@
             selectedTargets = [];
             renderNightAction(data);
             setBroadcast(data.prompt);
+        });
+
+        ws.on('night_waiting', (_data) => {
+            const panel = $('#night-action-panel');
+            if (panel) {
+                panel.classList.remove('hidden');
+                panel.innerHTML = `
+                    <div style="text-align:center;padding:2rem 1rem;">
+                        <h3 style="color:var(--accent-gold);margin-bottom:0.5rem;">夜晚进行中</h3>
+                        <p style="color:var(--text-secondary);font-size:0.9rem;">请安静等待...</p>
+                    </div>`;
+            }
         });
 
         ws.on('night_result', (data) => { addLogHTML(fmtLog(data.message), 'death'); setBroadcast(data.message); });
@@ -611,6 +624,23 @@
                 info.style.cssText = 'text-align:center;color:var(--accent-gold);font-size:0.85rem;font-weight:600;';
                 info.textContent = '投票进行中...';
                 nomCtrl.appendChild(info);
+
+                const me = gameState.players.find(p => p.id === playerId);
+                const alreadyVoted = me && (gameState.voted_players || []).includes(playerId);
+                const isBlockedButler = privateState && privateState.butler_master_id
+                    && me && me.alive && !alreadyVoted
+                    && !(gameState.voted_players || []).includes(privateState.butler_master_id);
+                if (!$('#voting-overlay') && !alreadyVoted && !isBlockedButler && gameState.voting_info) {
+                    const vi = gameState.voting_info;
+                    lastVotingData = {
+                        nominator_seat: vi.nominator_seat,
+                        nominator_name: vi.nominator_name,
+                        nominee_seat: vi.nominee_seat,
+                        nominee_name: vi.nominee_name,
+                        message: `对 [${vi.nominee_seat}]${vi.nominee_name} 的投票开始！`,
+                    };
+                    renderVoting(lastVotingData);
+                }
             }
         }
 

@@ -9,6 +9,8 @@ class WS {
         this._reconnectTimer = null;
         this._reconnectDelay = 1000;
         this._heartbeatTimer = null;
+        this._pongTimeout = null;
+        this._awaitingPong = false;
         this.connected = false;
     }
 
@@ -19,6 +21,7 @@ class WS {
         this._ws.onopen = () => {
             this.connected = true;
             this._reconnectDelay = 1000;
+            this._awaitingPong = false;
             this._startHeartbeat();
             this._dispatch('_open', {});
         };
@@ -26,6 +29,13 @@ class WS {
         this._ws.onmessage = (e) => {
             try {
                 const msg = JSON.parse(e.data);
+                if (msg.type === 'pong') {
+                    this._awaitingPong = false;
+                    clearTimeout(this._pongTimeout);
+                    return;
+                }
+                this._awaitingPong = false;
+                clearTimeout(this._pongTimeout);
                 this._dispatch(msg.type, msg.data || {});
             } catch (err) {
                 console.error('WS parse error:', err);
@@ -49,14 +59,24 @@ class WS {
         this._stopHeartbeat();
         this._heartbeatTimer = setInterval(() => {
             if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+                this._awaitingPong = true;
                 this.send('ping');
+                this._pongTimeout = setTimeout(() => {
+                    if (this._awaitingPong) {
+                        console.warn('WS: pong timeout, forcing reconnect');
+                        this._ws?.close();
+                    }
+                }, 5000);
             }
-        }, 25000);
+        }, 10000);
     }
 
     _stopHeartbeat() {
         clearInterval(this._heartbeatTimer);
         this._heartbeatTimer = null;
+        clearTimeout(this._pongTimeout);
+        this._pongTimeout = null;
+        this._awaitingPong = false;
     }
 
     send(type, data = {}) {
