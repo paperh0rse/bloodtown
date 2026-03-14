@@ -226,6 +226,19 @@ class TestImpNightKill:
         assert "a" in game._night_deaths
         assert game.players["b"].role_id == "imp"
 
+    async def test_imp_attacks_dead_player_no_death(self, mock_manager):
+        """Imp targets an already-dead player -> no one dies, announce '无人死亡'."""
+        game = make_game({"a": "imp", "b": "washerwoman", "c": "chef", "d": "empath", "e": "poisoner"})
+        game._night_deaths = []
+        kill(game, "b")
+
+        with patch.object(game, "_ask_player_choose", return_value="b"):
+            await game._action_imp("a")
+        await game._resolve_imp_kill()
+
+        assert "b" not in game._night_deaths
+        assert game._night_deaths == []
+
     async def test_imp_dead_cant_act(self, mock_manager):
         game = make_game({"a": "imp", "b": "washerwoman", "c": "chef", "d": "empath", "e": "poisoner"})
         game._night_deaths = []

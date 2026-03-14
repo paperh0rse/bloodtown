@@ -846,6 +846,10 @@ class Game:
             return
         target = self.players[self._imp_target]
 
+        if not target.alive:
+            self._imp_target = ""
+            return
+
         if target.role_id == "soldier" and not target.poisoned and not target.drunk:
             self._imp_target = ""
             return
